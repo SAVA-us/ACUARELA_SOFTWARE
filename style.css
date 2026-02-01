@@ -1,60 +1,140 @@
-/* Importar fuentes modernas */
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
+/* IMPORTAR FUENTES (Poppins) */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
 
+/* RESET Y BASE */
 html, body, [class*="css"] {
     font-family: 'Poppins', sans-serif;
+    background-color: #f4f6f9; /* Fondo gris muy claro para la app */
 }
 
-/* Encabezados personalizados */
-.main-header {
-    background-color: #4B49AC;
-    color: white;
-    padding: 20px;
-    border-radius: 10px;
-    text-align: center;
-    margin-bottom: 20px;
-    font-size: 24px;
+/* SIDEBAR PERSONALIZADO */
+section[data-testid="stSidebar"] {
+    background-color: #ffffff;
+    border-right: 1px solid #e0e0e0;
+}
+
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 2rem;
+}
+
+/* TÍTULOS Y CABECERAS */
+h1, h2, h3 {
+    color: #1a1a1a;
     font-weight: 600;
 }
 
-/* Tarjetas de Métricas */
-div[data-testid="stMetric"] {
-    background-color: #ffffff;
-    border: 1px solid #e0e0e0;
-    padding: 15px;
-    border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-    transition: all 0.3s ease;
+h1 {
+    font-size: 2.2rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(90deg, #2563eb, #1e40af);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
-div[data-testid="stMetric"]:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+/* TARJETAS DE MÉTRICAS (KPIs) */
+div[data-testid="metric-container"] {
+    background-color: white;
+    border: 1px solid #e5e7eb;
+    padding: 1rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    transition: transform 0.2s;
 }
 
-/* Sidebar Estilizada */
-section[data-testid="stSidebar"] {
-    background-color: #f4f5f7;
+div[data-testid="metric-container"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
 }
 
-/* Botones */
-button[kind="primary"] {
-    background-color: #7978E9 !important;
+div[data-testid="metric-container"] label {
+    font-size: 0.9rem;
+    color: #6b7280; /* Gris suave */
+}
+
+div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #111827;
+}
+
+/* BOTONES */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.2s;
     border: none;
-    color: white !important;
-    border-radius: 8px;
-    padding: 10px 24px;
+    padding: 0.5rem 1rem;
 }
 
-button[kind="secondary"] {
-    border: 1px solid #7978E9;
-    color: #7978E9 !important;
-    border-radius: 8px;
+/* Botón Primario (Azul) */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    color: white;
+    box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.3);
 }
 
-/* Tablas */
+.stButton > button[kind="primary"]:hover {
+    box-shadow: 0 6px 8px -1px rgba(37, 99, 235, 0.4);
+    transform: translateY(-1px);
+}
+
+/* Botón Secundario */
+.stButton > button[kind="secondary"] {
+    background-color: white;
+    border: 1px solid #d1d5db;
+    color: #374151;
+}
+
+.stButton > button[kind="secondary"]:hover {
+    background-color: #f3f4f6;
+    border-color: #9ca3af;
+}
+
+/* INPUTS Y FORMULARIOS */
+.stTextInput > div > div > input,
+.stNumberInput > div > div > input,
+.stSelectbox > div > div > div {
+    border-radius: 8px;
+    border: 1px solid #d1d5db;
+    background-color: white;
+    padding: 0.5rem;
+}
+
+.stTextInput > div > div > input:focus,
+.stNumberInput > div > div > input:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+/* TABLAS (DATAFRAME) */
 div[data-testid="stDataFrame"] {
-    border: 1px solid #e0e0e0;
+    border: 1px solid #e5e7eb;
     border-radius: 10px;
     overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+/* MENSAJES DE ALERTA */
+.stAlert {
+    border-radius: 8px;
+    border: none;
+}
+
+/* PERSONALIZACIÓN ESPECÍFICA PARA LOGIN */
+.login-container {
+    max-width: 400px;
+    margin: 5rem auto;
+    padding: 2rem;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.login-header h2 {
+    color: #1e3a8a;
 }
