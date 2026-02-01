@@ -2,114 +2,97 @@ import pandas as pd
 import os
 import datetime
 
-# Constantes de Archivos (Mapeados a tus subidas)
+# Nombres de archivos mapeados a tus CSVs exportados
 FILE_INVENTORY = "Base de datos Acuarela.xlsx - Sheet1.csv"
 FILE_ORDERS = "Base de datos Acuarela.xlsx - orders.csv"
-FILE_ORDER_ITEMS = "Base de datos Acuarela.xlsx - orders_items.csv"
 FILE_SUPPLIERS = "Base de datos Acuarela.xlsx - suppliers.csv"
 
 class DataManager:
-    def __init__(self, use_google_sheets=False):
-        """
-        Inicializa el gestor de datos.
-        :param use_google_sheets: Si es True, intenta conectar a GSheets (requiere credenciales).
-                                  Si es False, usa los CSVs locales.
-        """
-        self.use_google_sheets = use_google_sheets
+    def __init__(self):
+        """Inicializa el gestor de datos cargando los CSVs locales."""
         self.inventory_df = pd.DataFrame()
         self.orders_df = pd.DataFrame()
         self.suppliers_df = pd.DataFrame()
         self.load_data()
 
     def load_data(self):
-        """Carga datos desde CSV (o GSheets en el futuro) y limpia tipos de datos."""
+        """Carga y limpia los datos desde los archivos CSV."""
         try:
             # 1. Cargar Inventario
             if os.path.exists(FILE_INVENTORY):
                 self.inventory_df = pd.read_csv(FILE_INVENTORY)
-                # Limpieza de datos: Asegurar que precios y cantidades sean numéricos
-                self.inventory_df['sale_price'] = pd.to_numeric(self.inventory_df['sale_price'], errors='coerce').fillna(0)
-                self.inventory_df['purchase_price'] = pd.to_numeric(self.inventory_df['purchase_price'], errors='coerce').fillna(0)
-                self.inventory_df['quantity'] = pd.to_numeric(self.inventory_df['quantity'], errors='coerce').fillna(0)
-                # Convertir ID a string para búsquedas consistentes
-                self.inventory_df['id'] = self.inventory_df['id'].astype(str)
+                # Limpieza crítica: Convertir columnas numéricas que vienen como texto
+                cols_to_numeric = ['sale_price', 'purchase_price', 'quantity', 'min_stock_alert']
+                for col in cols_to_numeric:
+                    if col in self.inventory_df.columns:
+                        self.inventory_df[col] = pd.to_numeric(self.inventory_df[col], errors='coerce').fillna(0)
+                
+                # Asegurar que el ID sea string para búsquedas
+                if 'id' in self.inventory_df.columns:
+                    self.inventory_df['id'] = self.inventory_df['id'].astype(str)
             else:
-                self.inventory_df = pd.DataFrame(columns=['id', 'name', 'quantity', 'sale_price', 'purchase_price', 'supplier_name', 'min_stock_alert'])
+                self.inventory_df = pd.DataFrame(columns=['id', 'name', 'quantity', 'sale_price', 'purchase_price'])
 
             # 2. Cargar Pedidos
             if os.path.exists(FILE_ORDERS):
                 self.orders_df = pd.read_csv(FILE_ORDERS)
-            else:
-                self.orders_df = pd.DataFrame(columns=['id', 'timestamp', 'total', 'status', 'payment_method'])
-
-            # 3. Cargar Proveedores
-            if os.path.exists(FILE_SUPPLIERS):
-                self.suppliers_df = pd.read_csv(FILE_SUPPLIERS)
-            else:
-                self.suppliers_df = pd.DataFrame(columns=['id', 'name', 'contact_person', 'phone'])
             
-            print("Datos cargados correctamente.")
+            print("✅ Datos cargados correctamente desde CSV local.")
             
         except Exception as e:
-            print(f"Error cargando datos: {e}")
+            print(f"❌ Error cargando datos: {e}")
 
-    def get_inventory(self):
-        return self.inventory_df
-
-    def get_low_stock_items(self):
-        """Retorna items donde la cantidad es menor o igual a la alerta de stock mínimo."""
-        if self.inventory_df.empty:
-            return pd.DataFrame()
-        
-        # Asegurar comparación numérica
-        mask = self.inventory_df['quantity'] <= self.inventory_df['min_stock_alert']
-        return self.inventory_df[mask]
+    # --- Métodos de Lectura (Reemplazan a Firebase.get) ---
+    def get_all_products(self):
+        return self.inventory_df.to_dict('records')
 
     def get_product_by_barcode(self, barcode):
-        """Busca un producto por su código de barras (id)."""
-        if self.inventory_df.empty:
-            return None
+        """Busca producto por ID o Código de Barras"""
+        if self.inventory_df.empty: return None
         
-        product = self.inventory_df[self.inventory_df['id'] == str(barcode)]
-        if not product.empty:
-            return product.iloc[0].to_dict()
+        # Buscar coincidencia exacta en ID
+        prod = self.inventory_df[self.inventory_df['id'] == str(barcode)]
+        if not prod.empty:
+            return prod.iloc[0].to_dict()
         return None
 
-    def update_product_stock(self, barcode, new_quantity):
-        """Actualiza el stock de un producto (Simulado en memoria/CSV)."""
-        idx = self.inventory_df.index[self.inventory_df['id'] == str(barcode)].tolist()
+    def get_low_stock_products(self):
+        """Filtra productos con stock bajo"""
+        if self.inventory_df.empty: return []
+        return self.inventory_df[self.inventory_df['quantity'] <= self.inventory_df['min_stock_alert']].to_dict('records')
+
+    # --- Métodos de Escritura (Reemplazan a Firebase.update/set) ---
+    def update_stock(self, product_id, quantity_change):
+        """Actualiza el stock en memoria (y teóricamente guarda en CSV)"""
+        idx = self.inventory_df.index[self.inventory_df['id'] == str(product_id)].tolist()
         if idx:
-            self.inventory_df.at[idx[0], 'quantity'] = new_quantity
-            # En un entorno real, aquí guardaríamos de vuelta al CSV o Google Sheet
-            # self.save_inventory()
+            current_qty = self.inventory_df.at[idx[0], 'quantity']
+            new_qty = max(0, current_qty + quantity_change) # No permitir stock negativo
+            self.inventory_df.at[idx[0], 'quantity'] = new_qty
             return True
         return False
-    
-    def calculate_kpis(self):
-        """Calcula métricas clave para el dashboard."""
-        total_products = len(self.inventory_df)
-        
-        # Valor del inventario (Costo vs Venta)
-        total_cost_value = (self.inventory_df['quantity'] * self.inventory_df['purchase_price']).sum()
-        total_sales_value = (self.inventory_df['quantity'] * self.inventory_df['sale_price']).sum()
-        potential_profit = total_sales_value - total_cost_value
-        
-        low_stock_count = len(self.get_low_stock_items())
-        
-        return {
-            "total_products": total_products,
-            "inventory_cost": total_cost_value,
-            "inventory_value": total_sales_value,
-            "potential_profit": potential_profit,
-            "low_stock": low_stock_count
-        }
 
-    # --- Placeholder para futura implementación de Google Sheets ---
-    def sync_to_google_sheets(self):
-        """
-        Para activar esto en el futuro:
-        1. Configurar gspread con credenciales.json.
-        2. Abrir la hoja por nombre.
-        3. Usar set_with_dataframe de gspread-dataframe.
-        """
-        pass
+    def record_sale(self, cart_items, total, payment_method):
+        """Registra una venta en el historial"""
+        new_order = {
+            "id": f"ORD-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "total": total,
+            "items_count": len(cart_items),
+            "payment_method": payment_method,
+            "status": "completed"
+        }
+        # Agregar al DataFrame de ordenes
+        self.orders_df = pd.concat([self.orders_df, pd.DataFrame([new_order])], ignore_index=True)
+        return new_order['id']
+
+    def calculate_metrics(self):
+        """Calcula KPIs financieros"""
+        total_inv_value = (self.inventory_df['quantity'] * self.inventory_df['sale_price']).sum()
+        total_inv_cost = (self.inventory_df['quantity'] * self.inventory_df['purchase_price']).sum()
+        return {
+            "total_value": total_inv_value,
+            "total_cost": total_inv_cost,
+            "potential_profit": total_inv_value - total_inv_cost,
+            "product_count": len(self.inventory_df)
+        }
