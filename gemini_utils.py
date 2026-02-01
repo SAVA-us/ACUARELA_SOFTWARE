@@ -2,57 +2,48 @@ import google.generativeai as genai
 import os
 import pandas as pd
 
-# Configuración segura de la API Key
-# Se asume que la key está en las variables de entorno o secrets de Streamlit
-api_key = os.getenv("GOOGLE_API_KEY")
-if not api_key:
-    # Fallback para entorno de desarrollo si no está la env var
-    api_key = "" # El sistema inyectará la clave automáticamente en tiempo de ejecución si se usa el template correcto
+# Intenta obtener API KEY del entorno, sino deja vacío (el usuario deberá configurarlo)
+api_key = os.getenv("GOOGLE_API_KEY", "")
 
 def configure_gemini():
-    try:
+    if api_key:
         genai.configure(api_key=api_key)
-        return True
-    except Exception as e:
-        print(f"Error configurando Gemini: {e}")
-        return False
 
 def get_ai_response(prompt, context_data=None):
     """
-    Genera una respuesta de texto basada en un prompt y datos de contexto opcionales.
-    
-    :param prompt: Pregunta del usuario.
-    :param context_data: DataFrame o diccionario con datos del inventario/ventas.
+    Genera respuesta de Gemini usando datos del inventario como contexto.
     """
     try:
+        if not api_key:
+            return "⚠️ Por favor configura tu GOOGLE_API_KEY en el sistema."
+
         model = genai.GenerativeModel('gemini-2.5-flash-preview-09-2025')
         
-        full_prompt = "Actúa como un analista experto en logística y retail para 'Acuarela Software'.\n"
-        
+        # Construir contexto
+        context_str = ""
         if context_data is not None:
-            # Convertir datos a string para que la IA los lea (limitado a primeros 50 items para no saturar token limit)
             if isinstance(context_data, pd.DataFrame):
-                data_summary = context_data.head(50).to_string()
+                # Resumir datos para no exceder tokens: Estadísticas y primeros 50 items
                 stats = context_data.describe().to_string()
-                full_prompt += f"\nCONTEXTO DE DATOS ACTUALES:\n{data_summary}\n\nESTADÍSTICAS:\n{stats}\n\n"
+                sample = context_data.head(50).to_string()
+                context_str = f"DATOS DE INVENTARIO (Muestra):\n{sample}\n\nESTADÍSTICAS:\n{stats}\n"
             else:
-                full_prompt += f"\nCONTEXTO:\n{str(context_data)}\n\n"
-        
-        full_prompt += f"PREGUNTA DEL USUARIO: {prompt}\n"
-        full_prompt += "Respuesta concisa y accionable:"
+                context_str = str(context_data)
 
+        full_prompt = f"""
+        Actúa como el gerente experto de la tienda 'Rapitienda Acuarela'.
+        Tienes acceso a los siguientes datos del negocio:
+        {context_str}
+        
+        Responde a la siguiente pregunta del usuario de forma útil, breve y basada en los datos:
+        "{prompt}"
+        """
+        
         response = model.generate_content(full_prompt)
         return response.text
     except Exception as e:
-        return f"Lo siento, hubo un error al consultar a la IA: {str(e)}"
+        return f"Error en IA: {str(e)}"
 
-def analyze_image(image_data, prompt="Describe esta imagen para un inventario"):
-    """
-    Analiza imágenes (facturas, productos) usando Gemini Vision.
-    """
-    try:
-        model = genai.GenerativeModel('gemini-2.5-flash-preview-09-2025')
-        response = model.generate_content([prompt, image_data])
-        return response.text
-    except Exception as e:
-        return f"Error analizando imagen: {str(e)}"
+def analyze_image(image_bytes):
+    """Placeholder para visión por computadora (facturas, productos)"""
+    pass
