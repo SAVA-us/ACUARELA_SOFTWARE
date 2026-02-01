@@ -1,145 +1,284 @@
 import pandas as pd
 import logging
 import os
+import hashlib
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, List, Union, Tuple
 from pathlib import Path
 
 # --- Configuración de Logging ---
-# Registra eventos importantes y errores en un archivo y en la consola
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(module)s] - %(message)s',
     handlers=[
-        logging.FileHandler("system.log"),
+        logging.FileHandler("system_audit.log"),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("DataManager")
+logger = logging.getLogger("AcuarelaDB")
 
-class AdvancedDataManager:
+class DataManager:
     """
-    Gestor de datos de nivel empresarial.
-    Maneja la persistencia, validación y sanitización del inventario.
+    Gestor de datos Enterprise para Rapitienda Acuarela.
+    Reemplaza Firebase con un sistema robusto de archivos CSV/Excel locales.
+    Maneja: Inventario, Usuarios, Ventas, Proveedores.
     """
-
-    # Definición de tipos esperados para garantizar la integridad de los datos
-    COLUMN_TYPES = {
-        'id': str,              # IDs como texto para preservar ceros a la izquierda (ej: "00123")
-        'name': str,
-        'quantity': int,        # Cantidades enteras (cambiar a float si vendes a granel)
-        'purchase_price': float,
-        'sale_price': float,
-        'supplier_name': str,
-        'min_stock_alert': int
-    }
 
     def __init__(self, data_folder: str = "."):
         self.base_path = Path(data_folder)
-        # Nombre exacto de tu archivo principal subido
-        self.inventory_file = self.base_path / "Base de datos Acuarela.xlsx - Sheet1.csv"
         
-        self._ensure_files_exist()
+        # Archivos de Base de Datos
+        self.files = {
+            "inventory": self.base_path / "Base de datos Acuarela.xlsx - Sheet1.csv",
+            "users": self.base_path / "users.csv",
+            "sales": self.base_path / "sales.csv",
+            "suppliers": self.base_path / "suppliers.csv",
+            "audit": self.base_path / "audit_log.csv"
+        }
+        
+        self._initialize_system()
 
-    def _ensure_files_exist(self):
-        """Verifica la existencia de archivos críticos."""
-        if not self.inventory_file.exists():
-            logger.warning(f"Archivo principal no encontrado: {self.inventory_file}. Se creará uno nuevo al guardar.")
+    def _initialize_system(self):
+        """Inicializa la estructura de archivos si no existen."""
+        # 1. Usuarios (Crear Admin por defecto si no existe)
+        if not self.files["users"].exists():
+            df_users = pd.DataFrame([{
+                "username": "admin",
+                "password_hash": self._hash_password("admin123"),
+                "role": "admin",
+                "name": "Administrador Principal",
+                "created_at": datetime.now().isoformat()
+            }])
+            df_users.to_csv(self.files["users"], index=False)
+            logger.info("Sistema de usuarios inicializado. Usuario: admin / Clave: admin123")
 
-    def load_inventory(self) -> pd.DataFrame:
-        """
-        Lee el CSV con manejo estricto de tipos para evitar corrupción de datos.
-        """
-        if not self.inventory_file.exists():
-            return pd.DataFrame(columns=self.COLUMN_TYPES.keys())
+        # 2. Ventas (Estructura vacía)
+        if not self.files["sales"].exists():
+            pd.DataFrame(columns=[
+                "sale_id", "date", "product_id", "product_name", 
+                "quantity", "unit_price", "total", "cashier", "payment_method"
+            ]).to_csv(self.files["sales"], index=False)
 
+        # 3. Proveedores
+        if not self.files["suppliers"].exists():
+             pd.DataFrame(columns=["id", "name", "contact", "phone", "email"]).to_csv(self.files["suppliers"], index=False)
+
+    # --- UTILIDADES DE SEGURIDAD ---
+    
+    def _hash_password(self, password: str) -> str:
+        """Genera un hash SHA-256 seguro para contraseñas."""
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    # --- GESTIÓN DE USUARIOS (AUTH) ---
+
+    def authenticate_user(self, username, password) -> Optional[Dict]:
+        """Verifica credenciales y retorna datos del usuario o None."""
         try:
-            # 1. Lectura optimizada
-            df = pd.read_csv(
-                self.inventory_file,
-                dtype={'id': str}, # Crítico: fuerza la columna ID a texto
-                keep_default_na=False,
-                na_values=['', 'nan', 'NaN', 'N/A']
-            )
-
-            # 2. Normalización de cabeceras (elimina espacios y pone minúsculas)
-            df.columns = [c.strip().lower() for c in df.columns]
-
-            # 3. Validación y Limpieza
-            df = self._sanitize_data(df)
+            df = pd.read_csv(self.files["users"], dtype=str)
+            user = df[df['username'] == username]
             
-            logger.info(f"Inventario cargado: {len(df)} productos activos.")
-            return df
-
+            if user.empty:
+                return None
+            
+            stored_hash = user.iloc[0]['password_hash']
+            if stored_hash == self._hash_password(password):
+                return user.iloc[0].to_dict()
+            return None
         except Exception as e:
-            logger.error(f"Error crítico cargando inventario: {e}", exc_info=True)
-            return pd.DataFrame(columns=self.COLUMN_TYPES.keys())
+            logger.error(f"Error de autenticación: {e}")
+            return None
 
-    def _sanitize_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Limpieza profunda de datos (Deep Cleaning)."""
-        
-        # Limpieza de IDs: string, sin decimales (.0), sin espacios
-        if 'id' in df.columns:
-            df['id'] = df['id'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-            # Eliminar IDs inválidos
-            df = df[df['id'] != 'nan']
-            df = df[df['id'].str.len() > 0]
-            # Eliminar duplicados (mantiene el último modificado)
-            df = df.drop_duplicates(subset=['id'], keep='last')
-
-        # Limpieza de Nombres
-        if 'name' in df.columns:
-            df['name'] = df['name'].fillna("Sin Nombre").astype(str).str.title().str.strip()
-
-        # Limpieza Numérica (Precios y Stock)
-        numeric_cols = ['quantity', 'purchase_price', 'sale_price', 'min_stock_alert']
-        for col in numeric_cols:
-            if col in df.columns:
-                # Coerce convierte errores (texto) en NaN, luego fillna pone 0
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                # Asegurar valores positivos en precios
-                if 'price' in col:
-                    df[col] = df[col].abs()
-        
-        # Conversión final de tipos
-        if 'quantity' in df.columns:
-            df['quantity'] = df['quantity'].astype(int)
-
-        return df
-
-    def save_inventory(self, df: pd.DataFrame) -> bool:
-        """Guarda el estado actual del inventario."""
+    def create_user(self, username, password, role="staff", name="Empleado") -> bool:
+        """Registra un nuevo usuario en el sistema."""
         try:
-            # Añadir timestamp de actualización
-            df['updated_at'] = datetime.now().isoformat()
-            df.to_csv(self.inventory_file, index=False)
-            logger.info("Inventario guardado exitosamente.")
+            df = pd.read_csv(self.files["users"])
+            if username in df['username'].values:
+                return False # Usuario ya existe
+            
+            new_user = {
+                "username": username,
+                "password_hash": self._hash_password(password),
+                "role": role,
+                "name": name,
+                "created_at": datetime.now().isoformat()
+            }
+            df = pd.concat([df, pd.DataFrame([new_user])], ignore_index=True)
+            df.to_csv(self.files["users"], index=False)
             return True
         except Exception as e:
-            logger.error(f"Error guardando inventario: {e}")
+            logger.error(f"Error creando usuario: {e}")
             return False
 
-    def update_stock(self, product_id: str, delta: int) -> Tuple[bool, str]:
+    def get_all_users(self):
+        return pd.read_csv(self.files["users"]).to_dict('records')
+
+    # --- GESTIÓN DE INVENTARIO ---
+
+    def load_inventory(self) -> pd.DataFrame:
+        """Carga el inventario con limpieza robusta de datos."""
+        if not self.files["inventory"].exists():
+            return pd.DataFrame()
+
+        try:
+            # Lectura estricta para no perder códigos de barras
+            df = pd.read_csv(
+                self.files["inventory"], 
+                dtype={'id': str}, 
+                keep_default_na=False, 
+                na_values=['', 'nan']
+            )
+            
+            # Normalización
+            df.columns = [c.strip().lower() for c in df.columns]
+            
+            # Sanitización
+            if 'id' in df.columns:
+                df['id'] = df['id'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                df = df[df['id'] != 'nan']
+            
+            # Conversión numérica segura
+            numeric_cols = ['quantity', 'sale_price', 'purchase_price', 'min_stock_alert']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error cargando inventario: {e}")
+            return pd.DataFrame()
+
+    def save_inventory(self, df: pd.DataFrame):
+        df.to_csv(self.files["inventory"], index=False)
+
+    def update_product(self, product_data: Dict) -> bool:
+        """Actualiza o Crea un producto."""
+        try:
+            df = self.load_inventory()
+            pid = str(product_data['id']).strip()
+            
+            # Si el producto existe, lo actualizamos. Si no, lo creamos.
+            if pid in df['id'].values:
+                idx = df[df['id'] == pid].index[0]
+                for key, val in product_data.items():
+                    if key in df.columns:
+                        df.at[idx, key] = val
+                df.at[idx, 'updated_at'] = datetime.now().isoformat()
+            else:
+                product_data['updated_at'] = datetime.now().isoformat()
+                df = pd.concat([df, pd.DataFrame([product_data])], ignore_index=True)
+            
+            self.save_inventory(df)
+            return True
+        except Exception as e:
+            logger.error(f"Error actualizando producto: {e}")
+            return False
+
+    def delete_product(self, product_id: str) -> bool:
+        try:
+            df = self.load_inventory()
+            df = df[df['id'] != str(product_id)]
+            self.save_inventory(df)
+            return True
+        except Exception as e:
+            logger.error(f"Error eliminando producto: {e}")
+            return False
+
+    # --- GESTIÓN DE VENTAS (POS) ---
+
+    def register_sale(self, cart_items: List[Dict], payment_method: str, cashier: str) -> bool:
         """
-        Actualiza el stock de forma transaccional.
-        delta: negativo para ventas, positivo para reposición.
+        Registra una venta: Descuenta stock y guarda historial.
+        Transaccional: Si algo falla, intenta revertir (básico).
         """
-        df = self.load_inventory()
-        product_id = str(product_id).strip()
+        try:
+            df_inv = self.load_inventory()
+            sale_records = []
+            sale_id = str(uuid.uuid4())[:8]
+            timestamp = datetime.now().isoformat()
+            
+            # 1. Validar Stock
+            for item in cart_items:
+                pid = str(item['id'])
+                qty = int(item['qty'])
+                
+                # Buscar producto
+                mask = df_inv['id'] == pid
+                if not mask.any():
+                    logger.error(f"Producto {pid} no encontrado al vender.")
+                    return False
+                
+                current_stock = df_inv.loc[mask, 'quantity'].values[0]
+                if current_stock < qty:
+                    return False # Stock insuficiente
+                
+                # Descontar temporalmente en memoria
+                df_inv.loc[mask, 'quantity'] = current_stock - qty
+                
+                # Preparar registro de venta
+                sale_records.append({
+                    "sale_id": sale_id,
+                    "date": timestamp,
+                    "product_id": pid,
+                    "product_name": item['name'],
+                    "quantity": qty,
+                    "unit_price": item['price'],
+                    "total": item['price'] * qty,
+                    "cashier": cashier,
+                    "payment_method": payment_method
+                })
+
+            # 2. Guardar cambios en disco
+            self.save_inventory(df_inv)
+            
+            # 3. Guardar historial
+            df_sales = pd.read_csv(self.files["sales"])
+            df_sales = pd.concat([df_sales, pd.DataFrame(sale_records)], ignore_index=True)
+            df_sales.to_csv(self.files["sales"], index=False)
+            
+            logger.info(f"Venta {sale_id} registrada con éxito.")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error crítico en venta: {e}")
+            return False
+
+    def get_sales_report(self) -> pd.DataFrame:
+        """Obtiene el historial completo de ventas."""
+        if self.files["sales"].exists():
+            return pd.read_csv(self.files["sales"])
+        return pd.DataFrame()
+
+    def get_dashboard_metrics(self):
+        """Calcula métricas clave para el dashboard."""
+        df_sales = self.get_sales_report()
+        df_inv = self.load_inventory()
         
-        mask = df['id'] == product_id
-        if not mask.any():
-            return False, "Producto no encontrado."
-
-        current_qty = df.loc[mask, 'quantity'].values[0]
-        new_qty = current_qty + delta
-
-        # Validación de stock negativo
-        if new_qty < 0:
-            return False, f"Stock insuficiente (Disponible: {current_qty})"
-
-        df.loc[mask, 'quantity'] = int(new_qty)
+        metrics = {
+            "total_sales": 0,
+            "transaction_count": 0,
+            "low_stock_count": 0,
+            "inventory_value": 0
+        }
         
-        if self.save_inventory(df):
-            return True, f"Stock actualizado. Nuevo saldo: {new_qty}"
-        return False, "Error de escritura en disco."
+        if not df_sales.empty:
+            metrics["total_sales"] = df_sales['total'].sum()
+            metrics["transaction_count"] = df_sales['sale_id'].nunique()
+        
+        if not df_inv.empty:
+            metrics["low_stock_count"] = len(df_inv[df_inv['quantity'] <= df_inv.get('min_stock_alert', 5)])
+            metrics["inventory_value"] = (df_inv['quantity'] * df_inv['sale_price']).sum()
+            
+        return metrics
+
+    # --- PROVEEDORES ---
+    def get_suppliers(self):
+        if self.files["suppliers"].exists():
+            return pd.read_csv(self.files["suppliers"])
+        return pd.DataFrame()
+
+    def add_supplier(self, data):
+        df = self.get_suppliers()
+        data['id'] = str(uuid.uuid4())[:8]
+        df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
+        df.to_csv(self.files["suppliers"], index=False)
