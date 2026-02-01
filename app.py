@@ -1,285 +1,355 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from streamlit_option_menu import option_menu
-from data_manager import DataManager
-from barcode_manager import BarcodeHandler
-from gemini_utils import GeminiAssistant
 import time
+from data_manager import DataManager
+import gemini_utils
 
-# --- Configuración Inicial ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
     page_title="Rapitienda Acuarela | Enterprise",
-    page_icon="🎨",
+    page_icon="🛍️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Cargar estilos
-def load_css():
-    with open("style.css") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-load_css()
+# Cargar CSS
+def local_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
-# --- Gestión de Estado e Inicialización ---
-if 'manager' not in st.session_state:
-    st.session_state.manager = DataManager()
+local_css("style.css")
 
-if 'user' not in st.session_state:
-    st.session_state.user = None # None significa no logueado
-
-if 'cart' not in st.session_state:
+# --- INICIALIZACIÓN DE ESTADO ---
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "cart" not in st.session_state:
     st.session_state.cart = []
 
-manager = st.session_state.manager
+db = DataManager()
 
-# --- Módulo de Autenticación ---
+# --- FUNCIONES DE UI ---
+
 def login_page():
-    st.markdown("<div class='main-header'>🔐 Acceso al Sistema</div>", unsafe_allow_html=True)
-    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.info("Credenciales por defecto: admin / admin123")
+        st.markdown("""
+        <div style="text-align: center; padding: 2rem;">
+            <h1 style="color: #2563eb;">RAPITIENDA ACUARELA</h1>
+            <p style="color: #64748b;">Sistema de Gestión Enterprise</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
         with st.form("login_form"):
             username = st.text_input("Usuario")
             password = st.text_input("Contraseña", type="password")
-            submitted = st.form_submit_button("Ingresar", use_container_width=True)
+            submitted = st.form_submit_button("Iniciar Sesión", use_container_width=True)
             
             if submitted:
-                user = manager.authenticate_user(username, password)
+                user = db.verify_user(username, password)
                 if user:
+                    st.session_state.logged_in = True
                     st.session_state.user = user
-                    st.success(f"Bienvenido {user['name']}")
+                    st.success("¡Bienvenido!")
                     st.rerun()
                 else:
                     st.error("Usuario o contraseña incorrectos")
+        
+        st.markdown("""
+        <div style="text-align: center; margin-top: 2rem; color: #94a3b8; font-size: 0.8rem;">
+            © 2026 Acuarela Software S.A.S
+        </div>
+        """, unsafe_allow_html=True)
 
-def logout():
-    st.session_state.user = None
-    st.session_state.cart = []
-    st.rerun()
+def sidebar_menu():
+    with st.sidebar:
+        st.markdown("""
+        <div style="text-align: center; margin-bottom: 2rem;">
+            <div style="font-size: 3rem;">🛍️</div>
+            <h3 style="margin:0;">ACUARELA</h3>
+            <span style="background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold;">ENTERPRISE</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write(f"Hola, **{st.session_state.user['name']}**")
+        
+        menu = st.radio(
+            "Navegación",
+            ["Dashboard", "Venta (POS)", "Inventario", "Historial", "Consultor IA"],
+            label_visibility="collapsed"
+        )
+        
+        st.markdown("---")
+        if st.button("Cerrar Sesión", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.user = None
+            st.rerun()
+            
+    return menu
 
-# --- Vistas Principales ---
+# --- PÁGINAS ---
 
-def dashboard_view():
-    st.markdown("## 📊 Dashboard General")
-    metrics = manager.get_dashboard_metrics()
+def dashboard_page():
+    st.title("📊 Panel de Control")
+    st.markdown("Visión general del negocio en tiempo real.")
+    
+    metrics = db.get_dashboard_metrics()
     
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Ventas Totales", f"${metrics['total_sales']:,.0f}")
-    c2.metric("Transacciones", metrics['transaction_count'])
-    c3.metric("Valor Inventario", f"${metrics['inventory_value']:,.0f}")
-    c4.metric("Alertas Stock", metrics['low_stock_count'], delta_color="inverse")
+    c1.metric("Ventas Hoy", f"${metrics['sales_today']:,.0f}")
+    c2.metric("Valor Inventario", f"${metrics['inventory_value']:,.0f}")
+    c3.metric("Productos Activos", metrics['total_products'])
+    c4.metric("Alerta Stock Bajo", metrics['low_stock'], delta_color="inverse")
     
-    st.markdown("---")
-    
-    # Gráficos
-    df_sales = manager.get_sales_report()
+    st.markdown("### 📈 Tendencias Recientes")
+    # Gráfico simple de ventas basado en el CSV
+    df_sales = db.get_sales_history()
     if not df_sales.empty:
-        df_sales['date'] = pd.to_datetime(df_sales['date'])
-        
-        col_g1, col_g2 = st.columns(2)
-        
-        with col_g1:
-            st.subheader("Ventas por Día")
-            daily_sales = df_sales.groupby(df_sales['date'].dt.date)['total'].sum().reset_index()
-            fig = px.bar(daily_sales, x='date', y='total', color='total', template="plotly_white")
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with col_g2:
-            st.subheader("Top Productos")
-            top_prods = df_sales.groupby('product_name')['quantity'].sum().reset_index().sort_values('quantity', ascending=False).head(5)
-            fig2 = px.pie(top_prods, values='quantity', names='product_name', hole=0.4)
-            st.plotly_chart(fig2, use_container_width=True)
+        df_sales['fecha'] = pd.to_datetime(df_sales['timestamp']).dt.date
+        daily_sales = df_sales.groupby('fecha')['price'].sum()
+        st.line_chart(daily_sales)
+    else:
+        st.info("No hay datos de ventas suficientes para mostrar gráficos.")
 
-def pos_view():
-    st.markdown("## 🛒 Punto de Venta")
+def pos_page():
+    st.title("🛒 Punto de Venta")
     
-    col_izq, col_der = st.columns([2, 1])
+    col_prods, col_cart = st.columns([2, 1])
     
-    with col_izq:
-        # Buscador
-        query = st.text_input("🔍 Escanear producto o buscar por nombre", key="pos_search")
-        if query:
-            df_inv = manager.load_inventory()
-            results = BarcodeHandler.find_product(df_inv, query)
+    df_inv = db.get_inventory()
+    
+    with col_prods:
+        st.subheader("Catálogo")
+        # Buscador mejorado
+        search = st.text_input("🔍 Buscar producto (Nombre o Código)", placeholder="Escanear o escribir...")
+        
+        filtered_df = df_inv.copy()
+        if search:
+            # Filtrar por nombre o ID (código de barras)
+            mask = filtered_df['name'].astype(str).str.lower().str.contains(search.lower()) | \
+                   filtered_df['id'].astype(str).str.contains(search)
+            filtered_df = filtered_df[mask]
+        
+        # Mostrar productos como tarjetas o tabla seleccionable
+        if not filtered_df.empty:
+            # Usamos un dataframe con selección para añadir rápido
+            selection = st.dataframe(
+                filtered_df[['id', 'name', 'sale_price', 'quantity']],
+                column_config={
+                    "sale_price": st.column_config.NumberColumn("Precio", format="$%d"),
+                    "quantity": "Stock",
+                    "name": "Producto",
+                    "id": "Código"
+                },
+                use_container_width=True,
+                selection_mode="single-row",
+                on_select="rerun",
+                hide_index=True
+            )
             
-            if results:
-                for p in results:
-                    with st.container():
-                        st.info(f"**{p['name']}** | Stock: {p['quantity']} | Precio: ${p['sale_price']:,.0f}")
-                        if st.button(f"Agregar {p['name']}", key=f"add_{p['id']}"):
-                            # Lógica de agregar al carrito
-                            found = False
-                            for item in st.session_state.cart:
-                                if item['id'] == p['id']:
-                                    item['qty'] += 1
-                                    found = True
-                                    break
-                            if not found:
-                                st.session_state.cart.append({
-                                    'id': p['id'], 'name': p['name'], 'price': p['sale_price'], 'qty': 1
-                                })
-                            st.success("Agregado")
-                            time.sleep(0.2)
-                            st.rerun()
-            else:
-                st.warning("Producto no encontrado")
+            # Lógica para agregar al carrito al seleccionar
+            if selection.selection['rows']:
+                selected_idx = selection.selection['rows'][0]
+                product = filtered_df.iloc[selected_idx]
+                
+                # Verificar stock
+                in_cart_qty = sum(item['qty'] for item in st.session_state.cart if item['id'] == product['id'])
+                if product['quantity'] > in_cart_qty:
+                    # Buscar si ya está en carrito
+                    found = False
+                    for item in st.session_state.cart:
+                        if item['id'] == product['id']:
+                            item['qty'] += 1
+                            found = True
+                            break
+                    if not found:
+                        st.session_state.cart.append({
+                            'id': product['id'],
+                            'name': product['name'],
+                            'sale_price': product['sale_price'],
+                            'purchase_price': product.get('purchase_price', 0),
+                            'qty': 1
+                        })
+                    st.toast(f"Agregado: {product['name']}")
+                else:
+                    st.error("🚫 Stock insuficiente")
 
-    with col_der:
-        st.markdown("### 🛍️ Carrito")
+        else:
+            st.warning("No se encontraron productos.")
+
+    with col_cart:
+        st.subheader("Ticket Actual")
         if st.session_state.cart:
             total = 0
             for i, item in enumerate(st.session_state.cart):
-                subtotal = item['price'] * item['qty']
+                subtotal = item['sale_price'] * item['qty']
                 total += subtotal
-                st.markdown(f"**{item['name']}**")
-                c_qty, c_del = st.columns([2, 1])
-                item['qty'] = c_qty.number_input("Cant", 1, 100, item['qty'], key=f"qty_{i}", label_visibility="collapsed")
-                if c_del.button("❌", key=f"del_{i}"):
-                    st.session_state.cart.pop(i)
-                    st.rerun()
-                st.markdown(f"Subtotal: ${subtotal:,.0f}")
+                
+                c1, c2, c3 = st.columns([3, 1, 1])
+                with c1:
+                    st.write(f"**{item['name']}**")
+                    st.caption(f"${item['sale_price']} x {item['qty']}")
+                with c2:
+                    st.write(f"${subtotal}")
+                with c3:
+                    if st.button("🗑️", key=f"del_{i}"):
+                        st.session_state.cart.pop(i)
+                        st.rerun()
                 st.divider()
             
             st.markdown(f"### Total: ${total:,.0f}")
             
-            payment = st.selectbox("Método de Pago", ["Efectivo", "Tarjeta", "Transferencia"])
+            payment_method = st.selectbox("Método de Pago", ["Efectivo", "Nequi/Daviplata", "Tarjeta"])
             
-            if st.button("✅ Confirmar Venta", type="primary", use_container_width=True):
-                if manager.register_sale(st.session_state.cart, payment, st.session_state.user['username']):
+            if st.button("✅ Finalizar Venta", type="primary", use_container_width=True):
+                if db.register_sale(st.session_state.cart, total, payment_method):
                     st.balloons()
-                    st.success("Venta registrada correctamente")
+                    st.success("Venta registrada con éxito")
                     st.session_state.cart = []
                     time.sleep(2)
                     st.rerun()
                 else:
-                    st.error("Error al registrar venta. Verifica el stock.")
+                    st.error("Error al procesar la venta")
         else:
             st.info("El carrito está vacío")
+            st.markdown("""
+            <div style="text-align: center; font-size: 3rem; opacity: 0.3; margin-top: 2rem;">
+                🛒
+            </div>
+            """, unsafe_allow_html=True)
 
-def inventory_view():
-    st.markdown("## 📦 Gestión de Inventario")
+def inventory_page():
+    st.title("📦 Inventario")
     
     tab1, tab2 = st.tabs(["Ver Inventario", "Agregar Producto"])
     
     with tab1:
-        df = manager.load_inventory()
-        st.dataframe(df, use_container_width=True, height=500)
+        df = db.get_inventory()
+        # Editor de datos editable
+        edited_df = st.data_editor(
+            df,
+            num_rows="dynamic",
+            column_config={
+                "sale_price": st.column_config.NumberColumn("Precio Venta", format="$%d"),
+                "purchase_price": st.column_config.NumberColumn("Costo", format="$%d"),
+                "quantity": st.column_config.NumberColumn("Stock"),
+                "name": "Nombre Producto",
+                "supplier_name": "Proveedor"
+            },
+            use_container_width=True,
+            key="inventory_editor"
+        )
         
-        with st.expander("Descargar Reporte"):
-            st.download_button("Descargar CSV", df.to_csv(index=False), "inventario.csv", "text/csv")
-            
+        # Botón para guardar cambios masivos
+        if st.button("Guardar Cambios en CSV"):
+            try:
+                edited_df.to_csv(Data_manager.INVENTORY_FILE, index=False)
+                st.success("Base de datos de inventario actualizada.")
+            except:
+                # Fallback simple, idealmente usaríamos el método update del DataManager
+                # pero para edición masiva panda directo es más rápido
+                edited_df.to_csv('inventory.csv', index=False)
+                st.success("Guardado correctamente.")
+    
     with tab2:
-        with st.form("add_prod"):
+        with st.form("add_prod_form"):
             c1, c2 = st.columns(2)
-            pid = c1.text_input("Código de Barras (ID)")
-            name = c2.text_input("Nombre del Producto")
-            qty = c1.number_input("Cantidad Inicial", min_value=0)
-            min_stock = c2.number_input("Alerta Stock Mínimo", min_value=1, value=5)
-            p_buy = c1.number_input("Precio Compra", min_value=0.0)
-            p_sell = c2.number_input("Precio Venta", min_value=0.0)
-            supplier = st.text_input("Proveedor")
+            name = c1.text_input("Nombre del Producto")
+            code = c2.text_input("Código de Barras / ID")
             
-            if st.form_submit_button("Guardar Producto"):
+            c3, c4 = st.columns(2)
+            price_in = c3.number_input("Precio de Compra", min_value=0)
+            price_out = c4.number_input("Precio de Venta", min_value=0)
+            
+            c5, c6 = st.columns(2)
+            qty = c5.number_input("Cantidad Inicial", min_value=0, step=1)
+            min_alert = c6.number_input("Alerta Stock Mínimo", min_value=1, value=5)
+            
+            supplier = st.text_input("Nombre Proveedor")
+            
+            if st.form_submit_button("Crear Producto"):
                 new_prod = {
-                    "id": pid, "name": name, "quantity": qty, 
-                    "purchase_price": p_buy, "sale_price": p_sell, 
-                    "supplier_name": supplier, "min_stock_alert": min_stock
+                    'id': code if code else str(uuid.uuid4())[:8],
+                    'name': name,
+                    'purchase_price': price_in,
+                    'sale_price': price_out,
+                    'quantity': qty,
+                    'min_stock_alert': min_alert,
+                    'supplier_name': supplier,
+                    'updated_at': datetime.now().isoformat()
                 }
-                if manager.update_product(new_prod):
-                    st.success("Producto guardado")
-                else:
-                    st.error("Error guardando producto")
+                db.add_product(new_prod)
+                st.success("Producto agregado al inventario")
 
-def admin_view():
-    st.markdown("## 👥 Administración de Usuarios")
-    
-    if st.session_state.user['role'] != 'admin':
-        st.error("Acceso denegado. Se requieren permisos de administrador.")
-        return
+def history_page():
+    st.title("📜 Historial de Transacciones")
+    df = db.get_sales_history()
+    st.dataframe(
+        df,
+        column_config={
+            "price": st.column_config.NumberColumn("Total", format="$%d"),
+            "timestamp": "Fecha",
+            "status": "Estado"
+        },
+        use_container_width=True,
+        hide_index=True
+    )
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Usuarios Registrados")
-        users = manager.get_all_users()
-        st.table(pd.DataFrame(users)[['username', 'name', 'role', 'created_at']])
-        
-    with c2:
-        st.subheader("Crear Usuario")
-        with st.form("new_user"):
-            u_name = st.text_input("Usuario (Login)")
-            u_real = st.text_input("Nombre Completo")
-            u_pass = st.text_input("Contraseña", type="password")
-            u_role = st.selectbox("Rol", ["staff", "admin"])
-            
-            if st.form_submit_button("Crear"):
-                if manager.create_user(u_name, u_pass, u_role, u_real):
-                    st.success("Usuario creado")
-                    st.rerun()
-                else:
-                    st.error("Error: El usuario ya existe")
-
-def ai_assistant_view():
-    st.markdown("## 🤖 Asistente IA Gemini")
+def ai_page():
+    st.title("🤖 Consultor IA")
+    st.markdown("Analiza tu inventario y ventas con inteligencia artificial.")
     
-    api_key = st.text_input("Google API Key", type="password")
-    
-    if api_key:
-        assistant = GeminiAssistant(api_key)
-        prompt = st.text_area("Pregunta algo sobre tu negocio:")
-        
-        if st.button("Analizar") and prompt:
-            with st.spinner("Pensando..."):
-                df_inv = manager.load_inventory()
-                df_sales = manager.get_sales_report()
+    if st.button("Generar Análisis Rápido"):
+        with st.spinner("La IA está analizando tus datos..."):
+            try:
+                # Preparar datos para la IA
+                inv = db.get_inventory().to_string()
+                sales = db.get_sales_history().tail(20).to_string()
                 
-                # Contexto enriquecido para la IA
                 context = f"""
-                Inventario Total: {len(df_inv)} productos.
-                Valor Inventario: ${ (df_inv['quantity']*df_inv['sale_price']).sum() }.
-                Ventas Totales: ${ df_sales['total'].sum() if not df_sales.empty else 0 }.
-                Datos Inventario (Muestra): {df_inv.head(10).to_string()}
+                Actúa como un consultor de negocios experto. Aquí están los datos recientes de mi tienda:
+                
+                INVENTARIO (Muestra):
+                {inv[:1000]}...
+                
+                VENTAS RECIENTES:
+                {sales}
+                
+                Dame 3 recomendaciones estratégicas para mejorar mis ganancias esta semana.
+                Sé breve y directo.
                 """
                 
-                response = assistant.analyze_text(context, prompt)
-                st.markdown(response)
-    else:
-        st.info("Ingresa tu API Key para activar la inteligencia artificial.")
+                response = gemini_utils.get_gemini_response(context)
+                st.markdown("### 💡 Recomendaciones")
+                st.write(response)
+                
+            except Exception as e:
+                st.error(f"Error al conectar con IA: {e}")
+    
+    user_q = st.chat_input("Pregunta algo sobre tu negocio...")
+    if user_q:
+         with st.chat_message("user"):
+             st.write(user_q)
+         with st.chat_message("assistant"):
+             # Lógica simplificada de chat
+             st.write("Analizando...")
+             # (Aquí iría la llamada real a Gemini igual que arriba)
 
-# --- Router Principal ---
+# --- ROUTING ---
 
-def main():
-    if not st.session_state.user:
-        login_page()
-    else:
-        # Sidebar con Navegación Profesional
-        with st.sidebar:
-            st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=100)
-            st.markdown(f"### Hola, {st.session_state.user['name']}")
-            st.markdown(f"**Rol:** {st.session_state.user['role'].upper()}")
-            
-            selected = option_menu(
-                menu_title="Menú Principal",
-                options=["Dashboard", "Punto de Venta", "Inventario", "Usuarios", "IA Asistente", "Salir"],
-                icons=["bar-chart", "cart", "box", "people", "robot", "box-arrow-right"],
-                menu_icon="cast",
-                default_index=0,
-            )
-        
-        # Enrutamiento de vistas
-        if selected == "Dashboard":
-            dashboard_view()
-        elif selected == "Punto de Venta":
-            pos_view()
-        elif selected == "Inventario":
-            inventory_view()
-        elif selected == "Usuarios":
-            admin_view()
-        elif selected == "IA Asistente":
-            ai_assistant_view()
-        elif selected == "Salir":
-            logout()
-
-if __name__ == "__main__":
-    main()
+if not st.session_state.logged_in:
+    login_page()
+else:
+    selection = sidebar_menu()
+    
+    if selection == "Dashboard":
+        dashboard_page()
+    elif selection == "Venta (POS)":
+        pos_page()
+    elif selection == "Inventario":
+        inventory_page()
+    elif selection == "Historial":
+        history_page()
+    elif selection == "Consultor IA":
+        ai_page()
