@@ -1,8 +1,7 @@
 streamlit
 pandas
 plotly
+streamlit-option-menu
 google-generativeai
-python-dotenv
 openpyxl
-gspread
-oauth2cli
+watchdog
