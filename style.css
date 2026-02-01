@@ -1,61 +1,60 @@
-/* Fuente global */
+/* Importar fuentes modernas */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
+
 html, body, [class*="css"] {
-    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-family: 'Poppins', sans-serif;
 }
 
-/* Títulos principales */
-h1 {
-    color: #2E86C1; /* Azul corporativo */
-    font-weight: 700;
-}
-
-h2, h3 {
-    color: #2874A6;
-}
-
-/* Tarjetas de producto en el POS */
-div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
-    background-color: #f8f9fa;
+/* Encabezados personalizados */
+.main-header {
+    background-color: #4B49AC;
+    color: white;
+    padding: 20px;
     border-radius: 10px;
-    padding: 10px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    transition: transform 0.2s;
+    text-align: center;
+    margin-bottom: 20px;
+    font-size: 24px;
+    font-weight: 600;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+/* Tarjetas de Métricas */
+div[data-testid="stMetric"] {
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    padding: 15px;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    transition: all 0.3s ease;
 }
 
-/* Botones Primarios (Finalizar Venta) */
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+}
+
+/* Sidebar Estilizada */
+section[data-testid="stSidebar"] {
+    background-color: #f4f5f7;
+}
+
+/* Botones */
 button[kind="primary"] {
-    background-color: #28B463 !important; /* Verde éxito */
+    background-color: #7978E9 !important;
     border: none;
-    font-weight: bold;
-    transition: background-color 0.3s;
+    color: white !important;
+    border-radius: 8px;
+    padding: 10px 24px;
 }
 
-button[kind="primary"]:hover {
-    background-color: #1D8348 !important;
-}
-
-/* Botones Secundarios (Añadir) */
 button[kind="secondary"] {
-    border-radius: 20px;
-    border: 1px solid #AED6F1;
+    border: 1px solid #7978E9;
+    color: #7978E9 !important;
+    border-radius: 8px;
 }
 
-/* Métricas (Total a Pagar) */
-div[data-testid="stMetricValue"] {
-    font-size: 2rem !important;
-    color: #E74C3C; /* Rojo para destacar el precio */
-    font-weight: 800;
-}
-
-/* Alertas */
-div.stSuccess {
-    border-left: 5px solid #28B463;
-}
-div.stError {
-    border-left: 5px solid #C0392B;
+/* Tablas */
+div[data-testid="stDataFrame"] {
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    overflow: hidden;
 }
