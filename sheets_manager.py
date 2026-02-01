@@ -13,18 +13,21 @@ class SheetsManager:
     def __init__(self):
         self.client = None
         self.sheet = None
+        self.col_maps = {}  # Caché para saber en qué número de columna está cada dato
         self._connect()
 
     def _connect(self):
         """Conecta a Google Sheets usando los secrets de Streamlit."""
         try:
-            # Construir el diccionario de credenciales desde st.secrets
             scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
             
-            # Asumimos que el usuario puso el JSON en st.secrets["gcp_service_account"]
+            # Verificar si existen los secrets
+            if "gcp_service_account" not in st.secrets:
+                raise ValueError("No se encontró la sección [gcp_service_account] en secrets.toml")
+
             creds_dict = dict(st.secrets["gcp_service_account"])
             
-            # gspread requiere que private_key tenga los saltos de línea reales (\n)
+            # Corrección vital para la clave privada
             if "private_key" in creds_dict:
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
@@ -33,7 +36,7 @@ class SheetsManager:
             
             sheet_url = st.secrets.get("SHEET_URL")
             if not sheet_url:
-                raise ValueError("SHEET_URL no encontrado en secrets.")
+                raise ValueError("Falta 'SHEET_URL' en secrets.toml")
                 
             self.sheet = self.client.open_by_url(sheet_url)
             logger.info("✅ Conexión exitosa a Google Sheets.")
@@ -46,183 +49,224 @@ class SheetsManager:
         try:
             return self.sheet.worksheet(name)
         except gspread.WorksheetNotFound:
-            # Si no existe, la creamos (básico)
-            return self.sheet.add_worksheet(title=name, rows=1000, cols=20)
+            st.error(f"⚠️ No se encontró la hoja '{name}'. Asegúrate de que tu Excel tenga las pestañas correctas.")
+            raise
 
-    def _df_to_dicts(self, df):
-        return df.to_dict('records')
+    def _get_col_index(self, ws, col_name):
+        """Busca dinámicamente el índice (número) de una columna por su nombre en el encabezado."""
+        sheet_id = ws.title
+        if sheet_id not in self.col_maps:
+            headers = ws.row_values(1)
+            # Mapa { 'nombre_columna': indice_1_based }
+            self.col_maps[sheet_id] = {name.strip(): i + 1 for i, name in enumerate(headers)}
+        
+        # Intentar buscar
+        idx = self.col_maps[sheet_id].get(col_name)
+        
+        # Si no está, recargar headers por si cambiaron recientemente
+        if not idx:
+            headers = ws.row_values(1)
+            self.col_maps[sheet_id] = {name.strip(): i + 1 for i, name in enumerate(headers)}
+            idx = self.col_maps[sheet_id].get(col_name)
+            
+        if not idx:
+            logger.warning(f"Columna '{col_name}' no encontrada en la hoja '{sheet_id}'.")
+        return idx
 
     # --- INVENTARIO ---
     def get_all_inventory_items(self):
-        """Devuelve todo el inventario como lista de diccionarios."""
         ws = self._get_worksheet("inventory")
         data = ws.get_all_records()
-        # Asegurar tipos de datos
+        # Asegurar que los IDs sean strings para comparaciones consistentes
         for item in data:
-            item['id'] = str(item['id']) # ID siempre string para consistencia
+            item['id'] = str(item['id'])
         return data
 
     def get_inventory_item_details(self, item_id):
-        """Busca un item por ID (código de barras)."""
         items = self.get_all_inventory_items()
+        item_id_str = str(item_id).strip()
         for item in items:
-            if str(item.get('id')) == str(item_id):
+            if str(item.get('id')).strip() == item_id_str:
                 return item
         return None
 
     def save_inventory_item(self, data, custom_id, is_new=False, details=None):
-        """Guarda o actualiza un producto."""
         ws = self._get_worksheet("inventory")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Preparar fila
-        row_data = [
-            str(custom_id),
-            data.get('name'),
-            int(data.get('quantity', 0)),
-            float(data.get('purchase_price', 0.0)),
-            float(data.get('sale_price', 0.0)),
-            int(data.get('min_stock_alert', 5)),
-            data.get('supplier_name', ''),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ]
+        # Mapeamos los datos que vienen de la App a las columnas del CSV
+        mapped_data = {
+            'id': str(custom_id),
+            'name': data.get('name'),
+            'quantity': int(data.get('quantity', 0)),
+            'purchase_price': float(data.get('purchase_price', 0)),
+            'sale_price': float(data.get('sale_price', 0)),
+            'min_stock_alert': int(data.get('min_stock_alert', 5)),
+            'supplier_name': data.get('supplier_name', ''),
+            'updated_at': timestamp,
+            'supplier_id': data.get('supplier_id', '')
+        }
 
         if is_new:
-            # Añadir al final
-            ws.append_row(row_data)
+            # Para fila nueva, obtenemos headers y ordenamos los datos
+            headers = ws.row_values(1)
+            new_row = []
+            for h in headers:
+                key = h.strip()
+                new_row.append(mapped_data.get(key, "")) # Si la columna no está en nuestros datos, va vacía
+            ws.append_row(new_row)
         else:
-            # Actualizar: Buscar la celda con el ID
+            # Actualizar existente
             try:
                 cell = ws.find(str(custom_id))
-                # Actualizar toda la fila (rango A:H)
-                # Nota: gspread usa indexación 1-based
-                row_num = cell.row
-                # Actualizamos celdas específicas para no romper si hay más columnas
-                # Actualizar cantidad (Col 3), precios (4, 5), etc.
-                ws.update_cell(row_num, 2, data.get('name'))
-                ws.update_cell(row_num, 3, int(data.get('quantity')))
-                ws.update_cell(row_num, 4, float(data.get('purchase_price')))
-                ws.update_cell(row_num, 5, float(data.get('sale_price')))
-                ws.update_cell(row_num, 6, int(data.get('min_stock_alert')))
-                ws.update_cell(row_num, 7, data.get('supplier_name'))
-                ws.update_cell(row_num, 8, row_data[7]) # timestamp
+                row = cell.row
+                
+                # Actualizamos celda por celda usando el mapa de columnas
+                for col_name, val in mapped_data.items():
+                    if col_name == 'id': continue # No cambiamos el ID
+                    col_idx = self._get_col_index(ws, col_name)
+                    if col_idx:
+                        ws.update_cell(row, col_idx, val)
+                        
             except gspread.CellNotFound:
-                logger.error(f"Item {custom_id} no encontrado para actualizar.")
-                ws.append_row(row_data) # Fallback
+                # Si se marcó como update pero no existe, lo creamos
+                self.save_inventory_item(data, custom_id, is_new=True)
 
     def delete_inventory_item(self, item_id):
         ws = self._get_worksheet("inventory")
         try:
             cell = ws.find(str(item_id))
             ws.delete_rows(cell.row)
-            logger.info(f"Item {item_id} eliminado de Sheet.")
         except gspread.CellNotFound:
             pass
 
     # --- VENTAS Y PEDIDOS ---
     def create_order(self, order_data):
         """
-        Registra una venta. 
-        IMPORTANTE: En Sheets esto debe ser atómico manualmente.
-        1. Restar stock en 'inventory'.
-        2. Guardar en 'orders'.
-        3. Guardar items en 'orders_items'.
+        Registra la venta:
+        1. Resta stock en 'inventory'.
+        2. Guarda detalle en 'orders_items'.
+        3. Guarda cabecera en 'orders'.
         """
         ws_inv = self._get_worksheet("inventory")
         ws_orders = self._get_worksheet("orders")
         ws_items = self._get_worksheet("orders_items")
 
-        # Generar ID único simple basado en timestamp si no existe
-        order_id = f"ORD-{int(time.time())}"
+        order_id = f"ORD-{int(time.time())}" # ID único simple
         timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 1. Actualizar Stock (Uno por uno)
         alerts = []
-        items_summary_list = []
+        
+        # 1. Procesar Items y Stock
+        items_headers = ws_items.row_values(1)
         
         for item in order_data['ingredients']:
             item_id = str(item['id'])
             qty_sold = int(item['quantity'])
             
+            # Buscar y restar inventario
             try:
                 cell = ws_inv.find(item_id)
-                # Cantidad actual está en columna 3
-                current_qty = int(ws_inv.cell(cell.row, 3).value)
+                col_qty = self._get_col_index(ws_inv, 'quantity')
+                
+                # Leer cantidad actual
+                current_qty = int(ws_inv.cell(cell.row, col_qty).value or 0)
                 new_qty = current_qty - qty_sold
                 
                 if new_qty < 0:
-                    raise ValueError(f"Stock insuficiente para {item['name']}")
+                    return False, f"Stock insuficiente para '{item['name']}'. Disp: {current_qty}", []
 
-                ws_inv.update_cell(cell.row, 3, new_qty)
+                # Actualizar cantidad
+                ws_inv.update_cell(cell.row, col_qty, new_qty)
                 
-                # Check alerta
-                min_stock = int(ws_inv.cell(cell.row, 6).value or 0)
-                if 0 < new_qty <= min_stock:
-                    alerts.append(f"Stock bajo: {item['name']} ({new_qty})")
+                # Verificar alerta stock bajo
+                col_alert = self._get_col_index(ws_inv, 'min_stock_alert')
+                if col_alert:
+                    min_stock = int(ws_inv.cell(cell.row, col_alert).value or 0)
+                    if 0 < new_qty <= min_stock:
+                        alerts.append(f"Stock bajo: {item['name']} ({new_qty})")
 
-                # Guardar en orders_items
-                ws_items.append_row([
-                    order_id,
-                    item_id,
-                    item['name'],
-                    qty_sold,
-                    item.get('sale_price', 0),
-                    qty_sold * item.get('sale_price', 0)
-                ])
+                # Guardar fila en orders_items
+                # Mapeo de datos del item a columnas del CSV orders_items
+                item_row_map = {
+                    'order_id': order_id,
+                    'order_date': timestamp_str,
+                    'item_name': item['name'],
+                    'item_id': item_id,
+                    'quantity': qty_sold,
+                    'sale_price': float(item.get('sale_price', 0)),
+                    'purchase_price': float(item.get('purchase_price', 0)),
+                    'subtotal': qty_sold * float(item.get('sale_price', 0))
+                }
                 
-                items_summary_list.append(f"{item['name']} (x{qty_sold})")
+                row_to_append = []
+                for h in items_headers:
+                    row_to_append.append(item_row_map.get(h.strip(), ""))
+                ws_items.append_row(row_to_append)
 
             except gspread.CellNotFound:
-                logger.error(f"ID {item_id} no encontrado al procesar venta.")
+                return False, f"Producto ID {item_id} no encontrado en hoja 'inventory'.", []
 
-        # 2. Guardar Order Header
-        ws_orders.append_row([
-            order_id,
-            order_data.get('title', 'Venta'),
-            order_data.get('price', 0),
-            'completed', # En sheets asumimos completado directo
-            order_data.get('payment_method', 'efectivo'),
-            order_data.get('customer_name', 'General'),
-            timestamp_str,
-            ", ".join(items_summary_list)
-        ])
+        # 2. Registrar Orden (Cabecera)
+        orders_headers = ws_orders.row_values(1)
+        
+        # Mapeo de datos de la orden a columnas del CSV orders
+        order_row_map = {
+            'id': order_id,
+            'timestamp': timestamp_str,
+            'title': order_data.get('title', 'Venta'),
+            'price': order_data.get('price', 0),
+            'payment_method': order_data.get('payment_method', 'efectivo'),
+            'customer_name': order_data.get('customer_name', 'General'),
+            'status': 'completed',
+            'completed_at': timestamp_str
+        }
+        
+        row_order = []
+        for h in orders_headers:
+            row_order.append(order_row_map.get(h.strip(), ""))
+        
+        ws_orders.append_row(row_order)
 
-        return True, "Venta registrada en Google Sheets.", alerts
+        return True, "Venta registrada exitosamente en Google Sheets.", alerts
 
-    # Método compatible con la firma antigua de process_direct_sale
     def process_direct_sale(self, items_sold, sale_id_dummy, payment_data=None):
-        # Adaptamos los datos al formato de create_order
+        # Adaptador para la función que usaba App.py
         order_data = {
             'title': f"Venta Directa",
-            'price': sum(i['sale_price'] * i['quantity'] for i in items_sold),
+            'price': sum(i.get('sale_price', 0) * i['quantity'] for i in items_sold),
             'ingredients': items_sold,
             'payment_method': payment_data.get('method', 'efectivo') if payment_data else 'efectivo',
             'customer_name': payment_data.get('customer', 'General') if payment_data else 'General'
         }
         return self.create_order(order_data)
 
-    # --- REPORTES Y OTROS ---
+    # --- REPORTES Y LECTURA DE VENTAS ---
     def get_orders(self, status=None):
         ws = self._get_worksheet("orders")
         data = ws.get_all_records()
-        
-        # Enriquecer datos para compatibilidad con la app
         orders = []
         for row in data:
-            if status and row.get('status') != status and status != 'completed': 
-                # Si piden 'processing', sheets no suele tener ese estado en este flujo simple
+            # Filtrado simple por estado
+            if status and row.get('status') != status and status != 'completed':
                 continue
             
-            # Convertir string fecha a objeto datetime
+            # Parsear fecha para ordenamiento
+            ts_str = str(row.get('timestamp', ''))
             try:
-                dt = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S")
+                # Intentar varios formatos por si acaso
+                if 'T' in ts_str:
+                    dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                else:
+                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
             except:
                 dt = datetime.now()
             
-            # Reconstruir estructura de ingredientes simulada (no detallada para vista rápida)
-            # Para detalle completo habría que cruzar con orders_items, pero para la vista general esto basta
-            row['ingredients'] = [{'name': 'Ver detalle en hoja items', 'quantity': 0}] 
-            row['timestamp_obj'] = dt.replace(tzinfo=timezone.utc)
-            row['id'] = row['order_id'] # Alias
+            row['timestamp_obj'] = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+            
+            # Simulamos 'ingredients' vacío para que app.py no falle al iterar
+            # (Para ver detalles se usa la hoja orders_items en el Excel)
+            row['ingredients'] = [] 
             orders.append(row)
             
         return sorted(orders, key=lambda x: x['timestamp_obj'], reverse=True)
@@ -234,21 +278,29 @@ class SheetsManager:
             if start_date <= o['timestamp_obj'] <= end_date:
                 filtered.append(o)
         return filtered
-
+        
     def get_order_count(self):
-        ws = self._get_worksheet("orders")
-        return len(ws.col_values(1)) - 1 # Restar header
+         ws = self._get_worksheet("orders")
+         # Restamos 1 por el encabezado
+         return max(0, len(ws.col_values(1)) - 1)
 
     # --- PROVEEDORES ---
     def add_supplier(self, data):
         ws = self._get_worksheet("suppliers")
-        ws.append_row([
-            f"SUP-{int(time.time())}",
-            data.get('name'),
-            data.get('contact_person'),
-            data.get('email'),
-            data.get('phone')
-        ])
+        headers = ws.row_values(1)
+        
+        mapped_data = {
+            'id': f"SUP-{int(time.time())}",
+            'name': data.get('name'),
+            'contact_person': data.get('contact_person'),
+            'email': data.get('email'),
+            'phone': data.get('phone')
+        }
+        
+        row = []
+        for h in headers:
+            row.append(mapped_data.get(h.strip(), ""))
+        ws.append_row(row)
 
     def get_all_suppliers(self):
         ws = self._get_worksheet("suppliers")
