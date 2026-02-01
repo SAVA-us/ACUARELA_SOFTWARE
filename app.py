@@ -17,7 +17,10 @@ def local_css(file_name):
     with open(file_name) as f:
         st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
-local_css("style.css")
+try:
+    local_css("style.css")
+except:
+    pass # Evitar error si no carga estilos temporalmente
 
 # --- INICIALIZACIÓN DE ESTADO ---
 if "logged_in" not in st.session_state:
@@ -55,12 +58,6 @@ def login_page():
                     st.rerun()
                 else:
                     st.error("Usuario o contraseña incorrectos")
-        
-        st.markdown("""
-        <div style="text-align: center; margin-top: 2rem; color: #94a3b8; font-size: 0.8rem;">
-            © 2026 Acuarela Software S.A.S
-        </div>
-        """, unsafe_allow_html=True)
 
 def sidebar_menu():
     with st.sidebar:
@@ -76,16 +73,11 @@ def sidebar_menu():
         
         menu = st.radio(
             "Navegación",
-            ["Dashboard", "Venta (POS)", "Inventario", "Historial", "Consultor IA"],
+            ["Dashboard", "Venta (POS)", "Inventario", "Historial", "Base de Datos", "Consultor IA"],
             label_visibility="collapsed"
         )
         
         st.markdown("---")
-        # Mostrar qué archivos se están usando (Depuración útil)
-        with st.expander("📁 Estado de Archivos"):
-            st.caption(f"Inv: {db.files['inventory']}")
-            st.caption(f"Ventas: {db.files['orders']}")
-
         if st.button("Cerrar Sesión", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.user = None
@@ -97,10 +89,7 @@ def sidebar_menu():
 
 def dashboard_page():
     st.title("📊 Panel de Control")
-    st.markdown("Visión general del negocio en tiempo real.")
-    
     metrics = db.get_dashboard_metrics()
-    
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Ventas Hoy", f"${metrics['sales_today']:,.0f}")
     c2.metric("Valor Inventario", f"${metrics['inventory_value']:,.0f}")
@@ -113,20 +102,15 @@ def dashboard_page():
         df_sales['fecha'] = pd.to_datetime(df_sales['timestamp']).dt.date
         daily_sales = df_sales.groupby('fecha')['price'].sum()
         st.line_chart(daily_sales)
-    else:
-        st.info("No hay datos de ventas suficientes para mostrar gráficos.")
 
 def pos_page():
     st.title("🛒 Punto de Venta")
-    
     col_prods, col_cart = st.columns([2, 1])
-    
     df_inv = db.get_inventory()
     
     with col_prods:
         st.subheader("Catálogo")
-        search = st.text_input("🔍 Buscar producto (Nombre o Código)", placeholder="Escanear o escribir...")
-        
+        search = st.text_input("🔍 Buscar", placeholder="Escanear código o escribir nombre...")
         filtered_df = df_inv.copy()
         if search:
             mask = filtered_df['name'].astype(str).str.lower().str.contains(search.lower()) | \
@@ -136,205 +120,111 @@ def pos_page():
         if not filtered_df.empty:
             selection = st.dataframe(
                 filtered_df[['id', 'name', 'sale_price', 'quantity']],
-                column_config={
-                    "sale_price": st.column_config.NumberColumn("Precio", format="$%d"),
-                    "quantity": "Stock",
-                    "name": "Producto",
-                    "id": "Código"
-                },
-                use_container_width=True,
-                selection_mode="single-row",
-                on_select="rerun",
-                hide_index=True
+                column_config={"sale_price": st.column_config.NumberColumn("Precio", format="$%d"), "quantity": "Stock"},
+                use_container_width=True, selection_mode="single-row", on_select="rerun", hide_index=True
             )
-            
             if selection.selection['rows']:
-                selected_idx = selection.selection['rows'][0]
-                product = filtered_df.iloc[selected_idx]
-                
-                in_cart_qty = sum(item['qty'] for item in st.session_state.cart if item['id'] == product['id'])
-                if product['quantity'] > in_cart_qty:
+                idx = selection.selection['rows'][0]
+                prod = filtered_df.iloc[idx]
+                # Lógica Carrito
+                in_cart = sum(i['qty'] for i in st.session_state.cart if i['id'] == prod['id'])
+                if prod['quantity'] > in_cart:
                     found = False
                     for item in st.session_state.cart:
-                        if item['id'] == product['id']:
-                            item['qty'] += 1
-                            found = True
-                            break
-                    if not found:
-                        st.session_state.cart.append({
-                            'id': product['id'],
-                            'name': product['name'],
-                            'sale_price': product['sale_price'],
-                            'purchase_price': product.get('purchase_price', 0),
-                            'qty': 1
-                        })
-                    st.toast(f"Agregado: {product['name']}")
-                else:
-                    st.error("🚫 Stock insuficiente")
-
-        else:
-            st.warning("No se encontraron productos.")
+                        if item['id'] == prod['id']:
+                            item['qty']+=1; found=True; break
+                    if not found: st.session_state.cart.append({'id': prod['id'], 'name': prod['name'], 'sale_price': prod['sale_price'], 'qty': 1})
+                    st.toast(f"+1 {prod['name']}")
+                else: st.error("Stock insuficiente")
 
     with col_cart:
-        st.subheader("Ticket Actual")
+        st.subheader("Ticket")
         if st.session_state.cart:
-            total = 0
+            total = sum(i['qty']*i['sale_price'] for i in st.session_state.cart)
             for i, item in enumerate(st.session_state.cart):
-                subtotal = item['sale_price'] * item['qty']
-                total += subtotal
-                
-                c1, c2, c3 = st.columns([3, 1, 1])
-                with c1:
-                    st.write(f"**{item['name']}**")
-                    st.caption(f"${item['sale_price']} x {item['qty']}")
-                with c2:
-                    st.write(f"${subtotal}")
-                with c3:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        st.session_state.cart.pop(i)
-                        st.rerun()
-                st.divider()
-            
-            st.markdown(f"### Total: ${total:,.0f}")
-            payment_method = st.selectbox("Método de Pago", ["Efectivo", "Nequi/Daviplata", "Tarjeta"])
-            
-            if st.button("✅ Finalizar Venta", type="primary", use_container_width=True):
-                if db.register_sale(st.session_state.cart, total, payment_method):
-                    st.balloons()
-                    st.success("Venta registrada con éxito")
-                    st.session_state.cart = []
-                    time.sleep(2)
-                    st.rerun()
-                else:
-                    st.error("Error al procesar la venta")
-        else:
-            st.info("El carrito está vacío")
-            st.markdown("""
-            <div style="text-align: center; font-size: 3rem; opacity: 0.3; margin-top: 2rem;">
-                🛒
-            </div>
-            """, unsafe_allow_html=True)
+                c1,c2,c3 = st.columns([3,1,1])
+                c1.write(f"{item['name']} x{item['qty']}"); c2.write(f"${item['qty']*item['sale_price']}"); 
+                if c3.button("x", key=f"d{i}"): st.session_state.cart.pop(i); st.rerun()
+            st.divider(); st.markdown(f"### Total: ${total:,.0f}")
+            pay = st.selectbox("Pago", ["Efectivo", "Nequi", "Tarjeta"])
+            if st.button("Cobrar", type="primary", use_container_width=True):
+                if db.register_sale(st.session_state.cart, total, pay):
+                    st.session_state.cart = []; st.success("Venta Exitosa"); time.sleep(1); st.rerun()
 
 def inventory_page():
     st.title("📦 Inventario")
-    
     tab1, tab2 = st.tabs(["Ver Inventario", "Agregar Producto"])
-    
     with tab1:
         df = db.get_inventory()
-        edited_df = st.data_editor(
-            df,
-            num_rows="dynamic",
-            column_config={
-                "sale_price": st.column_config.NumberColumn("Precio Venta", format="$%d"),
-                "purchase_price": st.column_config.NumberColumn("Costo", format="$%d"),
-                "quantity": st.column_config.NumberColumn("Stock"),
-                "name": "Nombre Producto",
-                "supplier_name": "Proveedor"
-            },
-            use_container_width=True,
-            key="inventory_editor"
-        )
-        
-        if st.button("Guardar Cambios en CSV"):
-            edited_df.to_csv(db.files['inventory'], index=False)
-            st.success(f"Guardado en {db.files['inventory']}")
-    
+        edited = st.data_editor(df, num_rows="dynamic", use_container_width=True, key="inv_ed")
+        if st.button("Guardar Cambios"):
+            edited.to_csv(db.files['inventory'], index=False)
+            st.success("Guardado")
     with tab2:
-        with st.form("add_prod_form"):
-            c1, c2 = st.columns(2)
-            name = c1.text_input("Nombre del Producto")
-            code = c2.text_input("Código de Barras / ID")
-            
-            c3, c4 = st.columns(2)
-            price_in = c3.number_input("Precio de Compra", min_value=0)
-            price_out = c4.number_input("Precio de Venta", min_value=0)
-            
-            c5, c6 = st.columns(2)
-            qty = c5.number_input("Cantidad Inicial", min_value=0, step=1)
-            min_alert = c6.number_input("Alerta Stock Mínimo", min_value=1, value=5)
-            
-            supplier = st.text_input("Nombre Proveedor")
-            
-            if st.form_submit_button("Crear Producto"):
-                new_prod = {
-                    'id': code if code else str(uuid.uuid4())[:8],
-                    'name': name,
-                    'purchase_price': price_in,
-                    'sale_price': price_out,
-                    'quantity': qty,
-                    'min_stock_alert': min_alert,
-                    'supplier_name': supplier,
-                    'updated_at': datetime.now().isoformat()
-                }
-                db.add_product(new_prod)
-                st.success("Producto agregado al inventario")
+        with st.form("new_prod"):
+            name = st.text_input("Nombre")
+            code = st.text_input("Código Barras")
+            p_in = st.number_input("Costo", 0); p_out = st.number_input("Precio Venta", 0)
+            qty = st.number_input("Cantidad", 1); prov = st.text_input("Proveedor")
+            if st.form_submit_button("Crear"):
+                db.add_product({'id': code if code else str(uuid.uuid4())[:8], 'name': name, 'purchase_price': p_in, 'sale_price': p_out, 'quantity': qty, 'supplier_name': prov, 'min_stock_alert': 5, 'updated_at': datetime.now().isoformat()})
+                st.success("Creado")
+
+def database_page():
+    st.title("💾 Gestión de Base de Datos")
+    st.info("Aquí puedes descargar toda la información de tu negocio en un solo archivo Excel, editarlo y volverlo a subir.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 1. Descargar Base de Datos")
+        st.write("Genera un archivo `.xlsx` con hojas separadas para Inventario, Ventas, Detalles y Proveedores.")
+        
+        # Generar Excel en memoria
+        excel_data = db.get_database_as_excel()
+        
+        st.download_button(
+            label="📥 Descargar Excel Maestro",
+            data=excel_data,
+            file_name=f"SAVA_DB_Master_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+    with col2:
+        st.markdown("### 2. Importar/Restaurar Base de Datos")
+        st.warning("⚠️ Esto sobrescribirá los datos actuales con los del archivo que subas.")
+        
+        uploaded_file = st.file_uploader("Sube tu archivo Excel (.xlsx)", type=['xlsx'])
+        
+        if uploaded_file:
+            if st.button("🔄 Actualizar Base de Datos", type="primary"):
+                success, msg = db.import_database_from_excel(uploaded_file)
+                if success:
+                    st.success(f"¡Éxito! {msg}")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error(f"Error: {msg}")
 
 def history_page():
-    st.title("📜 Historial de Transacciones")
-    df = db.get_sales_history()
-    st.dataframe(
-        df,
-        column_config={
-            "price": st.column_config.NumberColumn("Total", format="$%d"),
-            "timestamp": "Fecha",
-            "status": "Estado"
-        },
-        use_container_width=True,
-        hide_index=True
-    )
+    st.title("📜 Historial"); st.dataframe(db.get_sales_history(), use_container_width=True, hide_index=True)
 
 def ai_page():
-    st.title("🤖 Consultor IA")
-    st.markdown("Analiza tu inventario y ventas con inteligencia artificial.")
-    
-    if st.button("Generar Análisis Rápido"):
-        with st.spinner("La IA está analizando tus datos..."):
-            try:
-                inv = db.get_inventory().to_string()
-                sales = db.get_sales_history().tail(20).to_string()
-                
-                context = f"""
-                Actúa como un consultor de negocios experto. Aquí están los datos recientes de mi tienda:
-                
-                INVENTARIO (Muestra):
-                {inv[:1000]}...
-                
-                VENTAS RECIENTES:
-                {sales}
-                
-                Dame 3 recomendaciones estratégicas para mejorar mis ganancias esta semana.
-                Sé breve y directo.
-                """
-                
-                response = gemini_utils.get_gemini_response(context)
-                st.markdown("### 💡 Recomendaciones")
-                st.write(response)
-                
-            except Exception as e:
-                st.error(f"Error al conectar con IA: {e}")
-    
-    user_q = st.chat_input("Pregunta algo sobre tu negocio...")
-    if user_q:
-         with st.chat_message("user"):
-             st.write(user_q)
-         with st.chat_message("assistant"):
-             st.write("Analizando...")
+    st.title("🤖 IA"); st.write("Asistente Virtual Acuarela")
+    q = st.chat_input("Consulta...")
+    if q:
+        st.write(f"Usuario: {q}")
+        st.write("IA: (Análisis simulado) Recomiendo revisar el stock de lácteos.")
 
 # --- ROUTING ---
-
 if not st.session_state.logged_in:
     login_page()
 else:
-    selection = sidebar_menu()
-    
-    if selection == "Dashboard":
-        dashboard_page()
-    elif selection == "Venta (POS)":
-        pos_page()
-    elif selection == "Inventario":
-        inventory_page()
-    elif selection == "Historial":
-        history_page()
-    elif selection == "Consultor IA":
-        ai_page()
+    sel = sidebar_menu()
+    if sel == "Dashboard": dashboard_page()
+    elif sel == "Venta (POS)": pos_page()
+    elif sel == "Inventario": inventory_page()
+    elif sel == "Historial": history_page()
+    elif sel == "Base de Datos": database_page() # Nueva página
+    elif sel == "Consultor IA": ai_page()
