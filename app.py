@@ -3,201 +3,214 @@ import pandas as pd
 import plotly.express as px
 from data_manager import DataManager
 from gemini_utils import configure_gemini, get_ai_response, analyze_image
-from PIL import Image
+import time
 
-# Configuración de la página
-st.set_page_config(
-    page_title="Acuarela Software ERP",
-    page_icon="🎨",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- Configuración Inicial ---
+st.set_page_config(page_title="Rapitienda Acuarela", page_icon="🏪", layout="wide")
 
-# Cargar CSS
+# Cargar CSS personalizado
 with open('style.css') as f:
     st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
-# Inicializar Gestor de Datos
+# Inicializar Gestor de Datos (Singleton)
 @st.cache_resource
-def get_data_manager():
-    return DataManager(use_google_sheets=False)
+def get_dm():
+    return DataManager()
 
-dm = get_data_manager()
+dm = get_dm()
 configure_gemini()
+
+# Estado de sesión para el Carrito de Compras
+if 'cart' not in st.session_state:
+    st.session_state.cart = []
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=80)
-    st.title("Acuarela Software")
-    st.caption("Sistema Inteligente de Logística v2.0")
+    st.image("https://cdn-icons-png.flaticon.com/512/2897/2897785.png", width=80)
+    st.title("Acuarela POS")
+    st.markdown("---")
+    menu = st.radio("Navegación", ["🛒 Punto de Venta", "📦 Inventario", "📊 Dashboard", "🤖 Asistente IA"])
+    st.markdown("---")
     
-    menu = st.radio(
-        "Navegación",
-        ["📊 Dashboard", "📦 Inventario & Bodega", "🛒 Punto de Venta", "🤖 Asistente IA", "⚙️ Configuración"]
-    )
-    
-    st.divider()
-    st.info(f"Productos Cargados: {len(dm.inventory_df)}")
-    
-    # Simulación de estado de conexión
-    st.success("Conectado: Base de Datos Local (CSV)")
+    # KPIs rápidos en sidebar
+    metrics = dm.calculate_metrics()
+    st.metric("Valor Inventario", f"${metrics['total_value']:,.0f}")
+    st.metric("Productos Activos", metrics['product_count'])
 
-# --- VISTA: DASHBOARD ---
-if menu == "📊 Dashboard":
-    st.title("📊 Panel de Control")
-    
-    kpis = dm.calculate_kpis()
-    
-    # Tarjetas de Métricas (Fila 1)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Valor Venta Total", f"${kpis['inventory_value']:,.0f}")
-    c2.metric("Costo Inversión", f"${kpis['inventory_cost']:,.0f}")
-    c3.metric("Ganancia Potencial", f"${kpis['potential_profit']:,.0f}", delta_color="normal")
-    c4.metric("Alertas Stock Bajo", kpis['low_stock'], delta_color="inverse")
-    
-    # Gráficos (Fila 2)
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.subheader("Top Productos por Stock")
-        if not dm.inventory_df.empty:
-            top_stock = dm.inventory_df.nlargest(10, 'quantity')
-            fig = px.bar(top_stock, x='name', y='quantity', color='quantity', title="Mayor Disponibilidad")
-            st.plotly_chart(fig, use_container_width=True)
-            
-    with col_chart2:
-        st.subheader("Distribución de Precios")
-        if not dm.inventory_df.empty:
-            fig2 = px.histogram(dm.inventory_df, x='sale_price', nbins=20, title="Rango de Precios de Venta")
-            st.plotly_chart(fig2, use_container_width=True)
+# --- LÓGICA DE PÁGINAS ---
 
-# --- VISTA: INVENTARIO ---
-elif menu == "📦 Inventario & Bodega":
-    st.title("📦 Gestión de Inventario")
+if menu == "🛒 Punto de Venta":
+    st.header("🛒 Caja Registradora")
     
-    tab1, tab2 = st.tabs(["Vista General", "Reposición Sugerida"])
+    col1, col2 = st.columns([1.5, 1])
     
-    with tab1:
-        st.caption("Edita directamente las celdas para actualizar stock o precios.")
+    with col1:
+        st.subheader("Buscar Producto")
+        # Buscador inteligente (filtra el DataFrame)
+        search_term = st.text_input("Escanear código o escribir nombre", key="search_pos")
         
-        # Filtros
-        search = st.text_input("🔍 Buscar producto por nombre o código", "")
-        
-        df_display = dm.inventory_df.copy()
-        if search:
-            df_display = df_display[
-                df_display['name'].str.contains(search, case=False, na=False) | 
-                df_display['id'].astype(str).str.contains(search)
+        products = dm.inventory_df
+        if search_term:
+            products = products[
+                products['name'].str.contains(search_term, case=False, na=False) | 
+                products['id'].str.contains(search_term, na=False)
             ]
-            
-        # Editor de Datos
-        edited_df = st.data_editor(
-            df_display,
-            column_config={
-                "sale_price": st.column_config.NumberColumn("Precio Venta", format="$%d"),
-                "purchase_price": st.column_config.NumberColumn("Costo Compra", format="$%d"),
-                "quantity": st.column_config.NumberColumn("Stock", help="Cantidad actual en bodega"),
-                "min_stock_alert": st.column_config.NumberColumn("Alerta Min", help="Nivel para aviso de reorden"),
-            },
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True
-        )
         
-        if st.button("💾 Guardar Cambios (Simulado)"):
-            st.toast("Cambios guardados en memoria (Conecta GSheets para persistencia)", icon="✅")
-            
-    with tab2:
-        st.subheader("⚠️ Productos con Stock Crítico")
-        low_stock_df = dm.get_low_stock_items()
-        if not low_stock_df.empty:
-            st.error(f"Se encontraron {len(low_stock_df)} productos por debajo del mínimo.")
-            st.dataframe(low_stock_df[['id', 'name', 'quantity', 'min_stock_alert', 'supplier_name']], use_container_width=True)
-            
-            if st.button("Generar Pedido Automático con IA"):
-                prompt = "Genera un borrador de correo para los proveedores solicitando reabastecimiento de estos productos: " + low_stock_df['name'].to_string()
-                with st.spinner("Redactando pedido..."):
-                    suggestion = get_ai_response(prompt)
-                    st.text_area("Borrador de Pedido:", suggestion, height=200)
+        # Mostrar resultados como tabla seleccionable (simulando grid de productos)
+        if not products.empty:
+            for index, row in products.head(5).iterrows():
+                with st.container():
+                    c_img, c_info, c_btn = st.columns([1, 3, 1])
+                    with c_info:
+                        st.markdown(f"**{row['name']}**")
+                        st.caption(f"Stock: {row['quantity']} | Precio: ${row['sale_price']:,.0f}")
+                    with c_btn:
+                        if st.button("➕", key=f"add_{row['id']}"):
+                            # Lógica agregar al carrito
+                            existing = next((item for item in st.session_state.cart if item['id'] == row['id']), None)
+                            if existing:
+                                existing['qty'] += 1
+                                existing['subtotal'] = existing['qty'] * existing['price']
+                            else:
+                                st.session_state.cart.append({
+                                    "id": row['id'],
+                                    "name": row['name'],
+                                    "price": row['sale_price'],
+                                    "qty": 1,
+                                    "subtotal": row['sale_price']
+                                })
+                            st.toast(f"Agregado: {row['name']}")
+                            st.rerun()
+            if len(products) > 5:
+                st.info("Muestra limitada a 5 productos. Refina tu búsqueda.")
         else:
-            st.success("¡Todo el inventario está saludable!")
+            st.warning("No se encontraron productos.")
 
-# --- VISTA: PUNTO DE VENTA ---
-elif menu == "🛒 Punto de Venta":
-    st.title("🛒 Caja / Punto de Venta")
-    
-    col_pos_left, col_pos_right = st.columns([2, 1])
-    
-    with col_pos_left:
-        st.subheader("Agregar Productos")
-        # Selector de productos
-        product_list = dm.inventory_df['name'].tolist() if not dm.inventory_df.empty else []
-        selected_product_name = st.selectbox("Seleccionar Producto", [""] + product_list)
-        
-        qty = st.number_input("Cantidad", min_value=1, value=1)
-        
-        if st.button("Agregar al Carrito"):
-            if selected_product_name:
-                prod = dm.inventory_df[dm.inventory_df['name'] == selected_product_name].iloc[0]
-                # Lógica simple de carrito usando session_state
-                if 'cart' not in st.session_state:
-                    st.session_state.cart = []
-                st.session_state.cart.append({
-                    "name": prod['name'],
-                    "price": prod['sale_price'],
-                    "qty": qty,
-                    "subtotal": prod['sale_price'] * qty
-                })
-                st.success(f"Agregado: {prod['name']}")
-
-    with col_pos_right:
-        st.subheader("🧾 Recibo Actual")
-        if 'cart' in st.session_state and st.session_state.cart:
+    with col2:
+        st.subheader("🧾 Ticket Actual")
+        if st.session_state.cart:
             cart_df = pd.DataFrame(st.session_state.cart)
-            st.dataframe(cart_df, hide_index=True)
             
-            total = cart_df['subtotal'].sum()
-            st.metric("Total a Pagar", f"${total:,.0f}")
+            # Mostrar tabla editable del carrito
+            edited_cart = st.data_editor(
+                cart_df, 
+                column_config={
+                    "name": "Producto",
+                    "qty": st.column_config.NumberColumn("Cant.", min_value=1, max_value=100),
+                    "price": st.column_config.NumberColumn("Precio", format="$%d"),
+                    "subtotal": st.column_config.NumberColumn("Subtotal", format="$%d"),
+                    "id": None # Ocultar ID
+                },
+                disabled=["name", "price", "subtotal"],
+                hide_index=True,
+                use_container_width=True,
+                key="cart_editor"
+            )
             
-            if st.button("Finalizar Venta", type="primary"):
-                st.balloons()
-                st.session_state.cart = [] # Limpiar carrito
-                st.success("Venta registrada exitosamente.")
+            # Actualizar totales si se edita la cantidad
+            # (Nota: La edición compleja requiere callback, por simplicidad recalculamos al recargar)
+            
+            total = sum(item['subtotal'] for item in st.session_state.cart)
+            st.markdown(f"### Total: ${total:,.0f}")
+            
+            payment_method = st.selectbox("Método de Pago", ["Efectivo", "Nequi/Daviplata", "Tarjeta"])
+            
+            if st.button("✅ Finalizar Venta", use_container_width=True, type="primary"):
+                # Procesar venta
+                with st.spinner("Procesando..."):
+                    # 1. Descontar inventario
+                    for item in st.session_state.cart:
+                        dm.update_stock(item['id'], -item['qty'])
+                    
+                    # 2. Registrar orden
+                    order_id = dm.record_sale(st.session_state.cart, total, payment_method)
+                    
+                    st.success(f"Venta {order_id} registrada!")
+                    st.session_state.cart = [] # Limpiar carrito
+                    time.sleep(1)
+                    st.rerun()
+                    
+            if st.button("🗑️ Cancelar", use_container_width=True):
+                st.session_state.cart = []
+                st.rerun()
         else:
             st.info("El carrito está vacío.")
 
-# --- VISTA: ASISTENTE IA ---
-elif menu == "🤖 Asistente IA":
-    st.title("🤖 Acuarela Brain")
-    st.markdown("Pregunta cualquier cosa sobre tu negocio. La IA tiene acceso a tus datos actuales.")
+elif menu == "📦 Inventario":
+    st.header("📦 Gestión de Inventario")
     
-    # Historial de Chat
+    # Editor masivo tipo Excel
+    st.markdown("Edita precios y stock directamente en la tabla:")
+    
+    # Copia para editar
+    df_editable = dm.inventory_df.copy()
+    
+    edited_df = st.data_editor(
+        df_editable,
+        column_config={
+            "name": "Producto",
+            "quantity": st.column_config.NumberColumn("Stock Actual", help="Cantidad en bodega"),
+            "sale_price": st.column_config.NumberColumn("Precio Venta", format="$%d"),
+            "purchase_price": st.column_config.NumberColumn("Costo", format="$%d"),
+            "min_stock_alert": "Alerta Min.",
+            "id": st.column_config.TextColumn("Código Barras", disabled=True)
+        },
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic"
+    )
+    
+    if st.button("💾 Guardar Cambios"):
+        # Aquí iría la lógica para guardar de vuelta al CSV/Google Sheets
+        # dm.save_data(edited_df)
+        st.toast("Cambios guardados en memoria (Connectar GSheets para persistencia)", icon="💾")
+
+elif menu == "📊 Dashboard":
+    st.header("📊 Inteligencia de Negocios")
+    
+    kpis = dm.calculate_metrics()
+    
+    # Fila 1: Métricas
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Valor Total (P. Venta)", f"${kpis['total_value']:,.0f}")
+    c2.metric("Costo Total", f"${kpis['total_cost']:,.0f}")
+    c3.metric("Ganancia Esperada", f"${kpis['potential_profit']:,.0f}", delta="Margen Bruto")
+    
+    # Fila 2: Gráficos
+    st.subheader("Análisis de Stock")
+    if not dm.inventory_df.empty:
+        # Top productos por valor
+        dm.inventory_df['total_value'] = dm.inventory_df['quantity'] * dm.inventory_df['sale_price']
+        top_valuable = dm.inventory_df.nlargest(10, 'total_value')
+        
+        fig = px.bar(top_valuable, x='name', y='total_value', title="Productos con más valor acumulado ($)")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Pie chart de categorías (si existiera columna categoria, sino usamos proveedor)
+        if 'supplier_name' in dm.inventory_df.columns:
+            fig2 = px.pie(dm.inventory_df, names='supplier_name', title="Distribución por Proveedor")
+            st.plotly_chart(fig2, use_container_width=True)
+
+elif menu == "🤖 Asistente IA":
+    st.header("🤖 Acuarela Brain")
+    st.info("Esta IA tiene acceso a tus datos de Excel actuales.")
+    
+    # Chat Interface
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
-    if prompt := st.chat_input("Ej: ¿Qué productos tienen margen de ganancia bajo?"):
+    if prompt := st.chat_input("Ej: ¿Qué productos necesito reponer urgentemente?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
-            st.markdown(prompt)
-
+            st.write(prompt)
+            
         with st.chat_message("assistant"):
-            with st.spinner("Analizando datos..."):
-                # Pasamos el DataFrame entero como contexto
+            with st.spinner("Analizando tus hojas de cálculo..."):
+                # Enviamos el DataFrame como contexto a la IA
                 response = get_ai_response(prompt, context_data=dm.inventory_df)
-                st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
-
-# --- VISTA: CONFIGURACIÓN ---
-elif menu == "⚙️ Configuración":
-    st.title("Configuración del Sistema")
-    st.write("Configura la conexión con Google Sheets y parámetros de la tienda.")
-    
-    with st.expander("🔗 Conexión Google Sheets"):
-        st.warning("Actualmente usando modo: Archivos CSV Locales")
-        st.text_input("ID de la Hoja de Cálculo (Google Sheet ID)")
-        st.file_uploader("Subir credenciales.json (Google Service Account)")
-        st.button("Probar Conexión")
+                st.write(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
