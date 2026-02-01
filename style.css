@@ -1,48 +1,61 @@
-/* Fuente moderna */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
+/* Fuente global */
 html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* Sidebar Styling */
-[data-testid="stSidebar"] {
-    background-color: #f8f9fa;
-    border-right: 1px solid #e9ecef;
-}
-
-/* Tarjetas de Métricas */
-[data-testid="stMetric"] {
-    background-color: #ffffff;
-    border: 1px solid #e0e0e0;
-    padding: 15px;
-    border-radius: 10px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-}
-
-/* Headers */
-h1, h2, h3 {
-    color: #2c3e50;
+/* Títulos principales */
+h1 {
+    color: #2E86C1; /* Azul corporativo */
     font-weight: 700;
 }
 
-/* Botones Primarios */
-div.stButton > button:first-child {
-    background-color: #4CAF50;
-    color: white;
-    border-radius: 8px;
-    border: none;
-    padding: 0.5rem 1rem;
-    font-weight: 600;
+h2, h3 {
+    color: #2874A6;
 }
 
-div.stButton > button:first-child:hover {
-    background-color: #45a049;
-    border: none;
+/* Tarjetas de producto en el POS */
+div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: #f8f9fa;
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    transition: transform 0.2s;
 }
 
-/* Ajustes de Tablas */
-[data-testid="stDataFrame"] {
-    border: 1px solid #f0f0f0;
-    border-radius: 8px;
+div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Botones Primarios (Finalizar Venta) */
+button[kind="primary"] {
+    background-color: #28B463 !important; /* Verde éxito */
+    border: none;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+button[kind="primary"]:hover {
+    background-color: #1D8348 !important;
+}
+
+/* Botones Secundarios (Añadir) */
+button[kind="secondary"] {
+    border-radius: 20px;
+    border: 1px solid #AED6F1;
+}
+
+/* Métricas (Total a Pagar) */
+div[data-testid="stMetricValue"] {
+    font-size: 2rem !important;
+    color: #E74C3C; /* Rojo para destacar el precio */
+    font-weight: 800;
+}
+
+/* Alertas */
+div.stSuccess {
+    border-left: 5px solid #28B463;
+}
+div.stError {
+    border-left: 5px solid #C0392B;
 }
