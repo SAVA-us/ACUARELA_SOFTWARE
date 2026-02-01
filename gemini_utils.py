@@ -1,49 +1,59 @@
 import google.generativeai as genai
-import os
 import pandas as pd
+import logging
+import time
 
-# Intenta obtener API KEY del entorno, sino deja vacío (el usuario deberá configurarlo)
-api_key = os.getenv("GOOGLE_API_KEY", "")
+logger = logging.getLogger("AI_Assistant")
 
-def configure_gemini():
-    if api_key:
-        genai.configure(api_key=api_key)
-
-def get_ai_response(prompt, context_data=None):
-    """
-    Genera respuesta de Gemini usando datos del inventario como contexto.
-    """
-    try:
+class GeminiAssistant:
+    def __init__(self, api_key: str):
         if not api_key:
-            return "⚠️ Por favor configura tu GOOGLE_API_KEY en el sistema."
+            logger.warning("API Key de Gemini no configurada. La IA estará desactivada.")
+            self.model = None
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                self.model = genai.GenerativeModel('gemini-2.5-flash-preview-09-2025')
+            except Exception as e:
+                logger.error(f"Error configurando Gemini: {e}")
+                self.model = None
 
-        model = genai.GenerativeModel('gemini-2.5-flash-preview-09-2025')
-        
-        # Construir contexto
-        context_str = ""
-        if context_data is not None:
-            if isinstance(context_data, pd.DataFrame):
-                # Resumir datos para no exceder tokens: Estadísticas y primeros 50 items
-                stats = context_data.describe().to_string()
-                sample = context_data.head(50).to_string()
-                context_str = f"DATOS DE INVENTARIO (Muestra):\n{sample}\n\nESTADÍSTICAS:\n{stats}\n"
-            else:
-                context_str = str(context_data)
-
-        full_prompt = f"""
-        Actúa como el gerente experto de la tienda 'Rapitienda Acuarela'.
-        Tienes acceso a los siguientes datos del negocio:
-        {context_str}
-        
-        Responde a la siguiente pregunta del usuario de forma útil, breve y basada en los datos:
-        "{prompt}"
+    def analyze_data(self, df: pd.DataFrame, user_query: str) -> str:
         """
-        
-        response = model.generate_content(full_prompt)
-        return response.text
-    except Exception as e:
-        return f"Error en IA: {str(e)}"
+        Envía datos resumidos del inventario a la IA para obtener insights.
+        """
+        if not self.model:
+            return "El servicio de IA no está disponible (Falta API Key o Error de conexión)."
 
-def analyze_image(image_bytes):
-    """Placeholder para visión por computadora (facturas, productos)"""
-    pass
+        try:
+            # Creamos un resumen ligero para no saturar el token limit
+            # Solo enviamos columnas relevantes
+            summary = df[['name', 'quantity', 'sale_price', 'supplier_name']].to_csv(index=False)
+            
+            # Si el CSV es muy grande, lo cortamos (ej: primeros 100 productos o resumen estadístico)
+            if len(summary) > 10000:
+                stats = df.describe().to_string()
+                data_context = f"Estadísticas del Inventario:\n{stats}"
+            else:
+                data_context = f"Datos del Inventario (CSV):\n{summary}"
+
+            prompt = f"""
+            Actúa como un analista de negocios experto para la tienda 'Acuarela'.
+            
+            Contexto de datos:
+            {data_context}
+            
+            Pregunta del usuario: "{user_query}"
+            
+            Instrucciones:
+            1. Responde basándote estrictamente en los datos proporcionados.
+            2. Sé conciso y da recomendaciones accionables.
+            3. Si detectas productos con stock bajo (quantity < 5), menciónalos.
+            """
+
+            response = self.model.generate_content(prompt)
+            return response.text
+
+        except Exception as e:
+            logger.error(f"Error generando respuesta de IA: {e}")
+            return "Hubo un error al procesar tu consulta con la IA. Intenta de nuevo."
