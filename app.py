@@ -81,6 +81,11 @@ def sidebar_menu():
         )
         
         st.markdown("---")
+        # Mostrar qué archivos se están usando (Depuración útil)
+        with st.expander("📁 Estado de Archivos"):
+            st.caption(f"Inv: {db.files['inventory']}")
+            st.caption(f"Ventas: {db.files['orders']}")
+
         if st.button("Cerrar Sesión", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.user = None
@@ -103,7 +108,6 @@ def dashboard_page():
     c4.metric("Alerta Stock Bajo", metrics['low_stock'], delta_color="inverse")
     
     st.markdown("### 📈 Tendencias Recientes")
-    # Gráfico simple de ventas basado en el CSV
     df_sales = db.get_sales_history()
     if not df_sales.empty:
         df_sales['fecha'] = pd.to_datetime(df_sales['timestamp']).dt.date
@@ -121,19 +125,15 @@ def pos_page():
     
     with col_prods:
         st.subheader("Catálogo")
-        # Buscador mejorado
         search = st.text_input("🔍 Buscar producto (Nombre o Código)", placeholder="Escanear o escribir...")
         
         filtered_df = df_inv.copy()
         if search:
-            # Filtrar por nombre o ID (código de barras)
             mask = filtered_df['name'].astype(str).str.lower().str.contains(search.lower()) | \
                    filtered_df['id'].astype(str).str.contains(search)
             filtered_df = filtered_df[mask]
         
-        # Mostrar productos como tarjetas o tabla seleccionable
         if not filtered_df.empty:
-            # Usamos un dataframe con selección para añadir rápido
             selection = st.dataframe(
                 filtered_df[['id', 'name', 'sale_price', 'quantity']],
                 column_config={
@@ -148,15 +148,12 @@ def pos_page():
                 hide_index=True
             )
             
-            # Lógica para agregar al carrito al seleccionar
             if selection.selection['rows']:
                 selected_idx = selection.selection['rows'][0]
                 product = filtered_df.iloc[selected_idx]
                 
-                # Verificar stock
                 in_cart_qty = sum(item['qty'] for item in st.session_state.cart if item['id'] == product['id'])
                 if product['quantity'] > in_cart_qty:
-                    # Buscar si ya está en carrito
                     found = False
                     for item in st.session_state.cart:
                         if item['id'] == product['id']:
@@ -199,7 +196,6 @@ def pos_page():
                 st.divider()
             
             st.markdown(f"### Total: ${total:,.0f}")
-            
             payment_method = st.selectbox("Método de Pago", ["Efectivo", "Nequi/Daviplata", "Tarjeta"])
             
             if st.button("✅ Finalizar Venta", type="primary", use_container_width=True):
@@ -226,7 +222,6 @@ def inventory_page():
     
     with tab1:
         df = db.get_inventory()
-        # Editor de datos editable
         edited_df = st.data_editor(
             df,
             num_rows="dynamic",
@@ -241,16 +236,9 @@ def inventory_page():
             key="inventory_editor"
         )
         
-        # Botón para guardar cambios masivos
         if st.button("Guardar Cambios en CSV"):
-            try:
-                edited_df.to_csv(Data_manager.INVENTORY_FILE, index=False)
-                st.success("Base de datos de inventario actualizada.")
-            except:
-                # Fallback simple, idealmente usaríamos el método update del DataManager
-                # pero para edición masiva panda directo es más rápido
-                edited_df.to_csv('inventory.csv', index=False)
-                st.success("Guardado correctamente.")
+            edited_df.to_csv(db.files['inventory'], index=False)
+            st.success(f"Guardado en {db.files['inventory']}")
     
     with tab2:
         with st.form("add_prod_form"):
@@ -303,7 +291,6 @@ def ai_page():
     if st.button("Generar Análisis Rápido"):
         with st.spinner("La IA está analizando tus datos..."):
             try:
-                # Preparar datos para la IA
                 inv = db.get_inventory().to_string()
                 sales = db.get_sales_history().tail(20).to_string()
                 
@@ -332,9 +319,7 @@ def ai_page():
          with st.chat_message("user"):
              st.write(user_q)
          with st.chat_message("assistant"):
-             # Lógica simplificada de chat
              st.write("Analizando...")
-             # (Aquí iría la llamada real a Gemini igual que arriba)
 
 # --- ROUTING ---
 
