@@ -1,43 +1,55 @@
 import google.generativeai as genai
 import os
 
-# Configuración básica
-# Nota: La API Key se toma del entorno por seguridad en la plataforma
-try:
-    # Intenta obtener la API key del entorno o usa una cadena vacía para que el usuario la configure
+def configure_gemini():
+    """Configura la API key desde las variables de entorno."""
     api_key = os.environ.get("GOOGLE_API_KEY", "") 
-    genai.configure(api_key=api_key)
-except:
-    pass
+    if api_key:
+        genai.configure(api_key=api_key)
+        return True
+    return False
 
 def get_gemini_response(prompt_text):
     """
-    Envía un prompt al modelo Gemini Flash y retorna la respuesta de texto.
+    Envía un prompt al modelo Gemini Flash y retorna la respuesta.
     """
+    if not configure_gemini():
+        return "⚠️ La clave GOOGLE_API_KEY no está configurada. Por favor, añádela a tus variables de entorno para usar el Consultor IA."
+
     try:
-        # Usamos el modelo flash preview que es rápido y eficiente
         model = genai.GenerativeModel('gemini-2.5-flash-preview-09-2025')
-        
         response = model.generate_content(prompt_text)
         return response.text
     except Exception as e:
-        return f"Error en el servicio de IA: {str(e)}. Por favor verifica tu API Key."
+        return f"Error en el servicio de IA: {str(e)}"
 
-def analyze_business_data(inventory_df, sales_df):
+def analyze_business_data(inventory_df, sales_df, user_query=None):
     """
-    Función auxiliar para preparar un prompt automático basado en dataframes
+    Construye un prompt de contexto empresarial enviando datos reales de la BD Excel.
     """
-    summary_inv = inventory_df.describe().to_string()
+    # Preparación de datos agregados (no enviamos toda la base, sino resúmenes para no superar límites de tokens)
     total_sales = sales_df['price'].sum() if not sales_df.empty else 0
+    total_orders = len(sales_df) if not sales_df.empty else 0
     
-    prompt = f"""
-    Analiza los siguientes datos de resumen de una tienda minorista:
-    
-    Resumen de Inventario:
-    {summary_inv}
-    
-    Ventas Totales Históricas: ${total_sales}
-    
-    Provee un diagnóstico corto de 1 párrafo sobre la salud del inventario.
+    if not inventory_df.empty:
+        total_inv_value = (pd.to_numeric(inventory_df['quantity'], errors='coerce') * pd.to_numeric(inventory_df['sale_price'], errors='coerce')).sum()
+        low_stock_items = inventory_df[pd.to_numeric(inventory_df['quantity'], errors='coerce') <= 3]['name'].tolist()
+        low_stock_str = ", ".join(low_stock_items[:5]) + ("..." if len(low_stock_items) > 5 else "")
+    else:
+        total_inv_value = 0
+        low_stock_str = "Ninguno"
+
+    base_context = f"""
+    Eres SAVA-IA, un consultor experto en retail y logística para 'Rapitienda Acuarela'.
+    Contexto actual del negocio:
+    - Ventas históricas totales: ${total_sales:,.2f} en {total_orders} pedidos.
+    - Valorización del inventario actual: ${total_inv_value:,.2f}
+    - Productos con stock crítico: {low_stock_str}
     """
+    
+    if user_query:
+        prompt = f"{base_context}\n\nPregunta del usuario: {user_query}\n\nProporciona una respuesta concisa, analítica y orientada a la toma de decisiones."
+    else:
+        prompt = f"{base_context}\n\nProporciona un diagnóstico general de la tienda en 2 párrafos, destacando recomendaciones urgentes de reabastecimiento si aplica."
+
     return get_gemini_response(prompt)
