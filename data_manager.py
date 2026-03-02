@@ -1,228 +1,203 @@
 import pandas as pd
-import uuid
-from datetime import datetime
 import os
-import hashlib
+import threading
+from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 import io
-import glob
 
-# Constantes de referencia (se sobrescribirán dinámicamente si encontramos los archivos largos)
-DEFAULT_INVENTORY = 'inventory.csv'
-DEFAULT_ORDERS = 'orders.csv'
-DEFAULT_ITEMS = 'orders_items.csv'
-DEFAULT_SUPPLIERS = 'suppliers.csv'
-USERS_FILE = 'users.csv'
+DB_FILE = 'SAVA_DB.xlsx'
 
 class DataManager:
     def __init__(self):
-        # Detectar automáticamente los archivos subidos
-        self.files = {
-            'inventory': self.find_file('inventory', DEFAULT_INVENTORY),
-            'orders': self.find_file('orders.csv', DEFAULT_ORDERS), # .csv para distinguir de items
-            'items': self.find_file('items', DEFAULT_ITEMS),
-            'suppliers': self.find_file('suppliers', DEFAULT_SUPPLIERS)
-        }
-        self.ensure_files_exist()
+        # Lock de hilos para evitar condiciones de carrera (Race Conditions)
+        # cuando múltiples usuarios usan Streamlit simultáneamente.
+        self.lock = threading.Lock()
+        self.file = DB_FILE
+        self._ensure_db_exists()
 
-    def find_file(self, keyword, default):
-        """Busca un archivo que contenga la palabra clave en el directorio actual."""
-        if os.path.exists(default):
-            return default
-            
-        files = [f for f in os.listdir('.') if keyword in f and f.endswith('.csv')]
-        
-        # Caso especial para 'orders.csv'
-        if keyword == 'orders.csv':
-             files = [f for f in os.listdir('.') if 'orders' in f and 'items' not in f and f.endswith('.csv')]
+    def _ensure_db_exists(self):
+        """Inicializa el archivo Excel maestro si no existe."""
+        with self.lock:
+            if not os.path.exists(self.file):
+                # Estructuras base extraídas de tus archivos CSV de exportación
+                df_inv = pd.DataFrame(columns=[
+                    'id', 'name', 'purchase_price', 'sale_price', 'quantity', 
+                    'supplier_name', 'supplier_id', 'min_stock_alert', 'updated_at'
+                ])
+                df_ord = pd.DataFrame(columns=[
+                    'id', 'timestamp', 'title', 'price', 'payment_method', 
+                    'customer_name', 'status', 'completed_at'
+                ])
+                df_items = pd.DataFrame(columns=[
+                    'order_id', 'order_date', 'item_name', 'quantity', 
+                    'sale_price', 'purchase_price', 'subtotal'
+                ])
+                df_supp = pd.DataFrame(columns=[
+                    'id', 'name', 'phone', 'email', 'contact_person'
+                ])
+                
+                # Crear un usuario admin seguro por defecto
+                df_users = pd.DataFrame({
+                    'username': ['admin'],
+                    'password': [generate_password_hash("admin123")], # Hash seguro con Salt
+                    'role': ['admin'],
+                    'name': ['Administrador Principal']
+                })
 
-        if files:
-            return files[0]
-        return default
+                with pd.ExcelWriter(self.file, engine='openpyxl') as writer:
+                    df_inv.to_excel(writer, sheet_name='inventory', index=False)
+                    df_ord.to_excel(writer, sheet_name='orders', index=False)
+                    df_items.to_excel(writer, sheet_name='orders_items', index=False)
+                    df_supp.to_excel(writer, sheet_name='suppliers', index=False)
+                    df_users.to_excel(writer, sheet_name='users', index=False)
 
-    def ensure_files_exist(self):
-        """Si no se encontraron archivos, crea los defaults vacíos"""
-        
-        if not os.path.exists(self.files['inventory']):
-            pd.DataFrame(columns=[
-                'id', 'name', 'purchase_price', 'updated_at', 'min_stock_alert', 
-                'supplier_id', 'sale_price', 'quantity', 'supplier_name'
-            ]).to_csv(self.files['inventory'], index=False)
-
-        if not os.path.exists(self.files['orders']):
-            pd.DataFrame(columns=[
-                'id', 'timestamp', 'title', 'price', 'payment_method', 
-                'customer_name', 'status', 'completed_at'
-            ]).to_csv(self.files['orders'], index=False)
-
-        if not os.path.exists(self.files['items']):
-            pd.DataFrame(columns=[
-                'order_id', 'order_date', 'item_name', 'quantity', 
-                'sale_price', 'purchase_price', 'subtotal'
-            ]).to_csv(self.files['items'], index=False)
-
-        if not os.path.exists(self.files['suppliers']):
-            pd.DataFrame(columns=['id', 'name', 'phone', 'email', 'contact_person']).to_csv(self.files['suppliers'], index=False)
-
-        if not os.path.exists(USERS_FILE):
-            default_pass = hashlib.sha256("admin123".encode()).hexdigest()
-            pd.DataFrame({
-                'username': ['admin'],
-                'password': [default_pass],
-                'role': ['admin'],
-                'name': ['Administrador Principal']
-            }).to_csv(USERS_FILE, index=False)
-
-    # --- FUNCIONES DE EXCEL (LAS QUE FALTABAN) ---
-
-    def get_database_as_excel(self):
-        """Genera un archivo Excel binario con todas las tablas en hojas separadas"""
-        output = io.BytesIO()
-        # Usamos xlsxwriter como motor
-        writer = pd.ExcelWriter(output, engine='xlsxwriter')
-        
-        # Leer dataframes actuales con manejo de errores
-        try: df_inv = pd.read_csv(self.files['inventory'])
-        except: df_inv = pd.DataFrame()
-        
-        try: df_ord = pd.read_csv(self.files['orders'])
-        except: df_ord = pd.DataFrame()
-        
-        try: df_items = pd.read_csv(self.files['items'])
-        except: df_items = pd.DataFrame()
-        
-        try: df_supp = pd.read_csv(self.files['suppliers'])
-        except: df_supp = pd.DataFrame()
-        
-        # Escribir en hojas (Secciones Requeridas)
-        df_inv.to_excel(writer, sheet_name='Inventario', index=False)
-        df_ord.to_excel(writer, sheet_name='Ventas', index=False)
-        df_items.to_excel(writer, sheet_name='Detalle_Ventas', index=False)
-        df_supp.to_excel(writer, sheet_name='Proveedores', index=False)
-        
-        writer.close()
-        processed_data = output.getvalue()
-        return processed_data
-
-    def import_database_from_excel(self, uploaded_file):
-        """Lee un Excel y sobrescribe los CSVs del sistema"""
+    def _read_sheet(self, sheet_name):
+        """Lee una hoja del Excel. Se asume que el lock ya fue adquirido por el método llamador o es solo lectura."""
         try:
-            # Leer todas las hojas
-            xls = pd.read_excel(uploaded_file, sheet_name=None)
-            
-            # Mapeo flexible de nombres de hojas
-            sheet_map = {
-                'inventario': self.files['inventory'],
-                'ventas': self.files['orders'],
-                'orders': self.files['orders'],
-                'detalle': self.files['items'],
-                'items': self.files['items'],
-                'proveedores': self.files['suppliers'],
-                'suppliers': self.files['suppliers']
-            }
-            
-            imported_count = 0
-            for sheet_name, df in xls.items():
-                # Normalizar nombre de hoja (quitar espacios, minúsculas)
-                norm_name = sheet_name.lower().strip()
-                
-                # Buscar archivo destino
-                target_file = None
-                for key, val in sheet_map.items():
-                    if key in norm_name:
-                        target_file = val
-                        break
-                
-                if target_file:
-                    df.to_csv(target_file, index=False)
-                    imported_count += 1
-            
-            return True, f"Se actualizaron {imported_count} secciones correctamente."
+            return pd.read_excel(self.file, sheet_name=sheet_name)
         except Exception as e:
-            return False, str(e)
+            return pd.DataFrame()
+
+    def _write_sheets(self, sheet_dict):
+        """Escribe múltiples hojas al Excel de forma transaccional."""
+        # Se necesita abrir el Excel actual, actualizar las hojas especificadas y mantener las demás
+        try:
+            # Leer todas las hojas actuales para no perder data
+            all_sheets = pd.read_excel(self.file, sheet_name=None)
+            
+            # Actualizar con los nuevos dataframes
+            for sheet_name, df in sheet_dict.items():
+                all_sheets[sheet_name] = df
+                
+            with pd.ExcelWriter(self.file, engine='openpyxl') as writer:
+                for sheet_name, df in all_sheets.items():
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+            return True
+        except Exception as e:
+            print(f"Error escribiendo DB: {e}")
+            return False
 
     # --- AUTENTICACIÓN ---
     def verify_user(self, username, password):
-        try:
-            df = pd.read_csv(USERS_FILE)
-            hashed_pw = hashlib.sha256(password.encode()).hexdigest()
-            user = df[(df['username'] == username) & (df['password'] == hashed_pw)]
-            if not user.empty:
-                return user.iloc[0].to_dict()
-            return None
-        except Exception:
-            return None
+        df_users = self._read_sheet('users')
+        user_row = df_users[df_users['username'] == username]
+        
+        if not user_row.empty:
+            user_dict = user_row.iloc[0].to_dict()
+            if check_password_hash(user_dict['password'], password):
+                return user_dict
+        return None
 
-    # --- MÉTODOS ESTÁNDAR ---
+    # --- INVENTARIO ---
     def get_inventory(self):
-        try: return pd.read_csv(self.files['inventory'])
-        except: return pd.DataFrame()
+        return self._read_sheet('inventory')
 
     def add_product(self, product_data):
-        df = pd.read_csv(self.files['inventory'])
-        new_row = pd.DataFrame([product_data])
-        df = pd.concat([df, new_row], ignore_index=True)
-        df.to_csv(self.files['inventory'], index=False)
+        with self.lock:
+            df = self._read_sheet('inventory')
+            new_row = pd.DataFrame([product_data])
+            df = pd.concat([df, new_row], ignore_index=True)
+            self._write_sheets({'inventory': df})
 
-    def register_sale(self, cart_items, total_price, payment_method="efectivo", customer_name="Cliente General"):
-        order_id = str(uuid.uuid4())[:20]
+    def update_inventory(self, df_edited):
+        with self.lock:
+            self._write_sheets({'inventory': df_edited})
+
+    # --- VENTAS (POS) ---
+    def register_sale(self, order_id, cart_items, total_price, payment_method, customer_name):
         timestamp = datetime.now()
         timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 1. Crear registro en ORDERS
-        new_order = {
-            'id': order_id, 'timestamp': timestamp_str, 'title': f"Venta #{int(timestamp.timestamp())}",
-            'price': total_price, 'payment_method': payment_method, 'customer_name': customer_name,
-            'status': 'completed', 'completed_at': timestamp_str
-        }
-        
-        df_orders = pd.read_csv(self.files['orders'])
-        df_orders = pd.concat([df_orders, pd.DataFrame([new_order])], ignore_index=True)
-        df_orders.to_csv(self.files['orders'], index=False)
+        with self.lock:
+            df_orders = self._read_sheet('orders')
+            df_items = self._read_sheet('orders_items')
+            df_inventory = self._read_sheet('inventory')
 
-        # 2. Items y 3. Actualizar Inventario
-        df_items = pd.read_csv(self.files['items'])
-        df_inventory = pd.read_csv(self.files['inventory'])
-        
-        items_to_add = []
-        for item in cart_items:
-            items_to_add.append({
-                'order_id': order_id, 'order_date': timestamp_str, 'item_name': item['name'],
-                'quantity': item['qty'], 'sale_price': item['sale_price'], 
-                'purchase_price': item.get('purchase_price', 0), 'subtotal': item['sale_price'] * item['qty']
-            })
-            # Actualizar Stock
-            mask = df_inventory['id'].astype(str) == str(item['id'])
-            if mask.any():
-                current_stock = df_inventory.loc[mask, 'quantity'].values[0]
-                df_inventory.loc[mask, 'quantity'] = max(0, current_stock - item['qty'])
+            # 1. Crear Orden
+            new_order = {
+                'id': order_id, 'timestamp': timestamp_str, 
+                'title': f"Venta #{int(timestamp.timestamp())}",
+                'price': total_price, 'payment_method': payment_method, 
+                'customer_name': customer_name, 'status': 'completed', 
+                'completed_at': timestamp_str
+            }
+            df_orders = pd.concat([df_orders, pd.DataFrame([new_order])], ignore_index=True)
 
-        if items_to_add:
-            df_items = pd.concat([df_items, pd.DataFrame(items_to_add)], ignore_index=True)
-            df_items.to_csv(self.files['items'], index=False)
-            df_inventory.to_csv(self.files['inventory'], index=False)
-            return True
+            # 2. Registrar Items y Actualizar Stock
+            items_to_add = []
+            for item in cart_items:
+                items_to_add.append({
+                    'order_id': order_id, 'order_date': timestamp_str, 
+                    'item_name': item['name'], 'quantity': item['qty'], 
+                    'sale_price': item['sale_price'], 
+                    'purchase_price': item.get('purchase_price', 0), 
+                    'subtotal': item['sale_price'] * item['qty']
+                })
+                
+                # Descuento de stock vectorial
+                mask = df_inventory['id'].astype(str) == str(item['id'])
+                if mask.any():
+                    current_stock = df_inventory.loc[mask, 'quantity'].values[0]
+                    df_inventory.loc[mask, 'quantity'] = max(0, current_stock - item['qty'])
+
+            if items_to_add:
+                df_items = pd.concat([df_items, pd.DataFrame(items_to_add)], ignore_index=True)
+                # Escribir transaccionalmente todo
+                self._write_sheets({
+                    'orders': df_orders,
+                    'orders_items': df_items,
+                    'inventory': df_inventory
+                })
+                return True
         return False
 
+    # --- DASHBOARD Y MÉTRICAS ---
     def get_sales_history(self):
-        try: return pd.read_csv(self.files['orders'])
-        except: return pd.DataFrame()
-            
+        return self._read_sheet('orders')
+
     def get_dashboard_metrics(self):
-        try:
-            df_inv = pd.read_csv(self.files['inventory'])
-            df_orders = pd.read_csv(self.files['orders'])
+        df_inv = self.get_inventory()
+        df_orders = self.get_sales_history()
+        
+        metrics = {"total_products": 0, "inventory_value": 0, "low_stock": 0, "sales_today": 0}
+        
+        if not df_inv.empty:
+            metrics['total_products'] = len(df_inv)
+            # Asegurar numérico para cálculo
+            df_inv['quantity'] = pd.to_numeric(df_inv['quantity'], errors='coerce').fillna(0)
+            df_inv['sale_price'] = pd.to_numeric(df_inv['sale_price'], errors='coerce').fillna(0)
+            df_inv['min_stock_alert'] = pd.to_numeric(df_inv['min_stock_alert'], errors='coerce').fillna(3)
             
-            total_products = len(df_inv)
-            total_inventory_value = (df_inv['quantity'] * df_inv['sale_price']).sum()
-            low_stock_count = len(df_inv[df_inv['quantity'] <= df_inv['min_stock_alert']])
+            metrics['inventory_value'] = (df_inv['quantity'] * df_inv['sale_price']).sum()
+            metrics['low_stock'] = len(df_inv[df_inv['quantity'] <= df_inv['min_stock_alert']])
             
+        if not df_orders.empty:
             df_orders['dt'] = pd.to_datetime(df_orders['timestamp'], errors='coerce')
             today = pd.Timestamp.now().normalize()
-            sales_today = df_orders[df_orders['dt'].dt.normalize() == today]['price'].sum()
+            metrics['sales_today'] = df_orders[df_orders['dt'].dt.normalize() == today]['price'].sum()
             
-            return {
-                "total_products": total_products, "inventory_value": total_inventory_value,
-                "low_stock": low_stock_count, "sales_today": sales_today
-            }
-        except:
-            return {"total_products": 0, "inventory_value": 0, "low_stock": 0, "sales_today": 0}
+        return metrics
+
+    # --- EXPORTAR E IMPORTAR ---
+    def get_database_as_bytes(self):
+        with open(self.file, "rb") as f:
+            return f.read()
+
+    def import_database(self, uploaded_file):
+        """Valida e importa un archivo Excel subido, reemplazando la base actual."""
+        try:
+            # Validación simple de que el archivo contiene hojas requeridas
+            xls = pd.read_excel(uploaded_file, sheet_name=None)
+            required_sheets = ['inventory', 'orders']
+            
+            for req in required_sheets:
+                if req not in xls:
+                    return False, f"Falta la hoja '{req}' en el archivo Excel."
+                    
+            with self.lock:
+                with pd.ExcelWriter(self.file, engine='openpyxl') as writer:
+                    for sheet_name, df in xls.items():
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+            return True, "Base de datos restaurada correctamente."
+        except Exception as e:
+            return False, str(e)
